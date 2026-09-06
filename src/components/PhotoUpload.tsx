@@ -5,9 +5,16 @@ interface Props {
   description: string;
   onChange: (files: File[]) => void;
   submitted?: boolean;
+  required?: boolean;
 }
 
-export function PhotoUpload({ title, description, onChange, submitted = false }: Props) {
+export function PhotoUpload({
+  title,
+  description,
+  onChange,
+  submitted = false,
+  required = true
+}: Props) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [files, setFiles] = useState<File[]>([]);
 
@@ -18,9 +25,7 @@ export function PhotoUpload({ title, description, onChange, submitted = false }:
     setFiles(next);
     onChange(next);
 
-    if (inputRef.current) {
-      inputRef.current.value = "";
-    }
+    if (inputRef.current) inputRef.current.value = "";
   };
 
   const removeFile = (index: number) => {
@@ -35,7 +40,9 @@ export function PhotoUpload({ title, description, onChange, submitted = false }:
       <div className="photo-title-row">
         <div>
           <strong>{title}</strong>
-          <span className="must">必传</span>
+          <span className={required ? "must" : "optional"}>
+            {required ? "必传" : "选填"}
+          </span>
         </div>
         <span className="camera">📷</span>
       </div>
@@ -53,7 +60,7 @@ export function PhotoUpload({ title, description, onChange, submitted = false }:
         type="file"
         accept="image/*"
         multiple
-        onChange={(e) => appendFiles(e.target.files)}
+        onChange={(event) => appendFiles(event.target.files)}
       />
 
       <button
@@ -73,7 +80,9 @@ export function PhotoUpload({ title, description, onChange, submitted = false }:
         <div className="file-list">
           {files.map((file, index) => (
             <div className="file-row" key={`${file.name}-${index}`}>
-              <span title={file.name}>{index + 1}. {file.name}</span>
+              <span title={file.name}>
+                {index + 1}. {file.name}
+              </span>
               {!submitted && (
                 <button type="button" onClick={() => removeFile(index)}>
                   删除
