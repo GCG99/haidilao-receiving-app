@@ -1,0 +1,26 @@
+{
+  "name": "haidilao-receiving-app",
+  "private": true,
+  "version": "4.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k \"node server/index.js\" \"vite --open\"",
+    "build": "vite build",
+    "start": "node server/index.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.2",
+    "express": "^5.2.1",
+    "multer": "^2.3.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^5.0.2",
+    "concurrently": "^10.0.5",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.3"
+  }
+}
