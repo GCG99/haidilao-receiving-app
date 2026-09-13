@@ -14,7 +14,10 @@ services:
     runtime: node
     plan: free
     region: singapore
-    buildCommand: npm install && npm run build
+    # --include=dev 是关键：NODE_ENV=production 会让 npm install 默认跳过
+    # devDependencies，但 vite/typescript 等构建工具都在 devDependencies 里，
+    # 不加这个 build 会报 "vite: not found"。
+    buildCommand: npm install --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /
     autoDeploy: true
