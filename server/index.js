@@ -4,7 +4,6 @@ import multer from "multer";
 import crypto from "node:crypto";
 import path from "node:path";
 import fs from "node:fs";
-import { query, withTransaction } from "./db/pool.js";
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
@@ -31,6 +30,10 @@ const typeLabels = {
   northern: "北方",
   other: "普通"
 };
+
+const labelToType = Object.fromEntries(
+  Object.entries(typeLabels).map(([type, label]) => [label, type])
+);
 
 // OCR 识别送货单文字后，用关键词猜测这次送货可能涉及哪些验收项目。
 // 只用来预勾选，员工可以随时手动改回去。
@@ -474,31 +477,97 @@ app.post("/api/auth/logout", (req, res) => {
    多维表格
    ========================= */
 
+function unwrap(value) {
+  if (value == null) return "";
+
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(unwrap).filter(Boolean).join(", ");
+  }
+
+  if (typeof value === "object") {
+    if ("text" in value) return String(value.text);
+    if ("name" in value) return String(value.name);
+    if ("value" in value) return unwrap(value.value);
+  }
+
+  return "";
+}
+
+function parseType(value) {
+  const text = unwrap(value).trim();
+
+  if (text === "领鲜") return "produce";
+  if (text === "北方") return "northern";
+  if (text === "Cowrock") return "meat";
+  if (text === "冻货") return "frozen";
+
+  return "other";
+}
+
+async function listAllRecords(appToken, tableId) {
+  const records = [];
+  let pageToken = "";
+
+  while (true) {
+    const params = new URLSearchParams({
+      page_size: "500"
+    });
+
+    if (pageToken) {
+      params.set("page_token", pageToken);
+    }
+
+    const data = await feishuRequest(
+      `${FEISHU}/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records?${params}`
+    );
+
+    records.push(...(data.data?.items || []));
+
+    if (!data.data?.has_more) break;
+
+    pageToken = data.data?.page_token || "";
+    if (!pageToken) break;
+  }
+
+  return records;
+}
+
 function isValidDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
-/* =========================
-   供应商送货计划（Phase 0 起：数据库是权威源，飞书"供应商计划"只是同步副本）
-   ========================= */
-
-async function fetchScheduleRows() {
-  const { rows } = await query(
-    `SELECT sch.weekday, sch.supplier_type, s.id, s.name
-     FROM supplier_delivery_schedule sch
-     JOIN suppliers s ON s.id = sch.supplier_id
-     WHERE s.status = '在用'`
+async function fetchSupplierPlanRecords() {
+  return listAllRecords(
+    process.env.FEISHU_SUPPLIER_APP_TOKEN,
+    process.env.FEISHU_SUPPLIER_TABLE_ID
   );
-  return rows;
 }
 
-function computeSuppliersForWeekday(scheduleRows, weekday) {
-  return scheduleRows
-    .filter((row) => row.weekday === weekday)
-    .map((row) => ({
-      id: row.id,
-      name: row.name,
-      type: row.supplier_type,
+function computeSuppliersForWeekday(planRecords, weekday) {
+  return planRecords
+    .map((record) => {
+      const fields = record.fields || {};
+
+      return {
+        id: record.record_id,
+        name: unwrap(fields["供应商"]).trim(),
+        day: unwrap(fields["收货星期"]).trim(),
+        type: parseType(fields["验收类型"])
+      };
+    })
+    .filter((item) => item.name && item.day === weekday)
+    .map(({ id, name, type }) => ({
+      id,
+      name,
+      type,
       temporary: false
     }));
 }
@@ -507,8 +576,8 @@ async function getSuppliersForDate(dateValue) {
   const date = new Date(`${dateValue}T00:00:00`);
   const weekday = weekdayNames[date.getDay()];
 
-  const scheduleRows = await fetchScheduleRows();
-  const suppliers = computeSuppliersForWeekday(scheduleRows, weekday);
+  const planRecords = await fetchSupplierPlanRecords();
+  const suppliers = computeSuppliersForWeekday(planRecords, weekday);
 
   return { weekday, suppliers };
 }
@@ -542,61 +611,56 @@ app.get("/api/suppliers", requireLogin, async (req, res) => {
    已提交收货记录（用于回显 + 看板）
    ========================= */
 
-// 把 receiving_records LEFT JOIN receiving_photos 查出来的行，按 record 分组还原成
-// 前端期待的 ReceivingRecord 形状（跟原来从飞书读出来的形状保持一致，前端不用改）。
-function groupReceivingRows(rows) {
-  const byId = new Map();
+function normalizeReceivingRecord(record) {
+  const fields = record.fields || {};
 
-  for (const row of rows) {
-    if (!byId.has(row.id)) {
-      byId.set(row.id, {
-        record_id: row.id,
-        supplier_id: row.supplier_id || "",
-        supplier_name: row.supplier_name,
-        supplier_type: row.supplier_type || "other",
-        date: row.date,
-        status: row.status === "no_goods" ? "no_goods" : "completed",
-        selections: row.selections || {},
-        exceptionNote: row.exception_note || "",
-        operator: row.operator || "",
-        photos: []
-      });
-    }
-
-    if (row.file_token) {
-      byId.get(row.id).photos.push({
-        kind: row.kind,
-        file_token: row.file_token,
-        file_name: row.file_name || ""
-      });
-    }
+  let selections = {};
+  try {
+    selections = JSON.parse(unwrap(fields["验收选项"]) || "{}");
+  } catch {
+    selections = {};
   }
 
-  return [...byId.values()];
-}
+  let photoMeta = [];
+  try {
+    photoMeta = JSON.parse(unwrap(fields["照片信息"]) || "[]");
+  } catch {
+    photoMeta = [];
+  }
 
-const RECEIVING_JOIN_SELECT = `
-  SELECT r.id, r.date, r.supplier_id, r.supplier_name, r.supplier_type, r.status,
-         r.selections, r.exception_note, r.operator,
-         p.kind, p.file_token, p.file_name, p.sequence
-  FROM receiving_records r
-  LEFT JOIN receiving_photos p ON p.receiving_record_id = r.id
-`;
+  const attachments = Array.isArray(fields["验收照片"]) ? fields["验收照片"] : [];
+
+  const photos = attachments.map((attachment, index) => ({
+    kind: photoMeta[index]?.kind || "other",
+    file_token: attachment.file_token,
+    file_name: attachment.name || photoMeta[index]?.file_name || ""
+  }));
+
+  const statusRaw = unwrap(fields["状态"]).trim();
+
+  return {
+    record_id: record.record_id,
+    supplier_id: unwrap(fields["供应商ID"]).trim(),
+    supplier_name: unwrap(fields["供应商"]).trim(),
+    supplier_type: labelToType[unwrap(fields["验收类型"]).trim()] || "other",
+    date: unwrap(fields["收货日期"]).trim(),
+    status: statusRaw === "no_goods" ? "no_goods" : "completed",
+    selections,
+    exceptionNote: unwrap(fields["异常说明"]).trim(),
+    operator: unwrap(fields["操作人"]).trim(),
+    photos
+  };
+}
 
 async function getReceivingRecordsForDate(dateValue) {
-  const { rows } = await query(
-    `${RECEIVING_JOIN_SELECT} WHERE r.date = $1 ORDER BY r.created_at, p.sequence`,
-    [dateValue]
+  const records = await listAllRecords(
+    process.env.FEISHU_RECEIVING_APP_TOKEN,
+    process.env.FEISHU_RECEIVING_TABLE_ID
   );
-  return groupReceivingRows(rows);
-}
 
-async function getReceivingRecordsForRange(fromValue, toValue) {
-  const { rows } = await query(
-    `${RECEIVING_JOIN_SELECT} WHERE r.date BETWEEN $1 AND $2 ORDER BY r.created_at, p.sequence`,
-    [fromValue, toValue]
-  );
-  return groupReceivingRows(rows);
+  return records
+    .map(normalizeReceivingRecord)
+    .filter((item) => item.date === dateValue);
 }
 
 app.get("/api/receiving", requireLogin, async (req, res) => {
@@ -686,17 +750,18 @@ app.get("/api/overview", requireLogin, async (req, res) => {
       }
     }
 
-    // 供应商排班和收货记录各只查一次数据库，按天在内存里匹配，不用每天都单独查一次。
-    const [scheduleRows, allReceiving] = await Promise.all([
-      fetchScheduleRows(),
-      getReceivingRecordsForRange(fromValue, toValue)
+    // 供应商计划和收货记录各只拉一次，按天在内存里匹配，避免每天都重新请求飞书。
+    const [planRecords, allReceiving] = await Promise.all([
+      fetchSupplierPlanRecords(),
+      listAllRecords(process.env.FEISHU_RECEIVING_APP_TOKEN, process.env.FEISHU_RECEIVING_TABLE_ID)
     ]);
+    const normalized = allReceiving.map(normalizeReceivingRecord);
 
     const result = dateValues.map((dateValue) => {
       const date = new Date(`${dateValue}T00:00:00`);
       const weekday = weekdayNames[date.getDay()];
-      const suppliers = computeSuppliersForWeekday(scheduleRows, weekday);
-      const dayRecords = allReceiving.filter((item) => item.date === dateValue);
+      const suppliers = computeSuppliersForWeekday(planRecords, weekday);
+      const dayRecords = normalized.filter((item) => item.date === dateValue);
 
       const submittedIds = new Set(dayRecords.map((item) => item.supplier_id).filter(Boolean));
       const submittedNames = new Set(dayRecords.map((item) => item.supplier_name));
@@ -876,6 +941,7 @@ app.post(
   async (req, res) => {
     try {
       checkEnv();
+      await ensureReceivingFields();
 
       const meta = JSON.parse(String(req.body.meta || "{}"));
       const files = Array.isArray(req.files) ? req.files : [];
@@ -888,8 +954,6 @@ app.post(
 
       const uploaded = [];
 
-      // 照片文件本体暂时还是存在飞书 Drive（Phase 0 没有动这部分），这里拿到的是 file_token，
-      // 数据库只存这个引用，不存文件本身。
       for (let i = 0; i < files.length; i++) {
         const currentMeta = photoMetaRaw[i]
           ? JSON.parse(photoMetaRaw[i])
@@ -910,105 +974,44 @@ app.post(
       }
 
       const status = meta.status === "no_goods" ? "no_goods" : "completed";
-      const recordId = `rec_${crypto.randomUUID()}`;
 
-      // 供应商ID是否真的在字典里，只做尽力而为的关联：不在字典里（临时叫货场景）
-      // 不阻断提交，只是这条记录的 supplier_id 留空，supplier_name 仍然如实记录。
-      let supplierId = null;
-      if (meta.supplierId) {
-        const { rows } = await query(`SELECT id FROM suppliers WHERE id = $1`, [meta.supplierId]);
-        if (rows.length) supplierId = rows[0].id;
-      }
+      const fields = {
+        "供应商": meta.supplier || "",
+        "收货日期": meta.date || "",
+        "验收类型": typeLabels[meta.supplierType] || meta.supplierType || "",
+        "供应商ID": meta.supplierId || "",
+        "状态": status,
+        "验收选项": JSON.stringify(meta.selections || {}),
+        "异常说明": meta.exceptionNote || "",
+        "操作人": req.user.name || ""
+      };
 
-      // 数据库写入是这次提交真正生效的判定点，必须成功；写完才算提交成功。
-      await withTransaction(async (client) => {
-        await client.query(
-          `INSERT INTO receiving_records
-             (id, date, supplier_id, supplier_name, supplier_type, status, selections, exception_note, operator, operator_open_id)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-          [
-            recordId,
-            meta.date,
-            supplierId,
-            meta.supplier || "",
-            meta.supplierType || "other",
-            status,
-            JSON.stringify(meta.selections || {}),
-            meta.exceptionNote || "",
-            req.user.name || "",
-            req.user.open_id || ""
-          ]
-        );
-
-        for (let i = 0; i < uploaded.length; i++) {
-          const photo = uploaded[i];
-          await client.query(
-            `INSERT INTO receiving_photos (receiving_record_id, kind, file_token, file_name, sequence)
-             VALUES ($1,$2,$3,$4,$5)`,
-            [recordId, photo.kind, photo.file_token, photo.file_name, i + 1]
-          );
-        }
-      });
-
-      // 飞书同步：实时做，但失败不影响这次提交的结果（数据库已经写成功了）。
-      // 失败只记到 sync_status/sync_error，留着以后补同步用。
-      let feishuRecordId = null;
-      try {
-        await ensureReceivingFields();
-
-        const fields = {
-          "供应商": meta.supplier || "",
-          "收货日期": meta.date || "",
-          "验收类型": typeLabels[meta.supplierType] || meta.supplierType || "",
-          "供应商ID": meta.supplierId || "",
-          "状态": status,
-          "验收选项": JSON.stringify(meta.selections || {}),
-          "异常说明": meta.exceptionNote || "",
-          "操作人": req.user.name || ""
-        };
-
-        if (uploaded.length > 0) {
-          fields["验收照片"] = uploaded.map((item) => ({
-            file_token: item.file_token
-          }));
-          fields["照片信息"] = JSON.stringify(
-            uploaded.map((item) => ({ kind: item.kind, file_name: item.file_name }))
-          );
-        }
-
-        const responseData = await feishuRequest(
-          `${FEISHU}/open-apis/bitable/v1/apps/${process.env.FEISHU_RECEIVING_APP_TOKEN}/tables/${process.env.FEISHU_RECEIVING_TABLE_ID}/records`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json; charset=utf-8"
-            },
-            body: JSON.stringify({
-              fields
-            })
-          }
-        );
-
-        feishuRecordId = responseData.data?.record?.record_id || null;
-
-        await query(
-          `UPDATE receiving_records SET feishu_record_id = $1, sync_status = 'synced', sync_error = NULL, updated_at = now() WHERE id = $2`,
-          [feishuRecordId, recordId]
-        );
-      } catch (syncError) {
-        console.error("同步到飞书失败（不影响本次提交，数据库已写入）：", syncError);
-
-        await query(
-          `UPDATE receiving_records SET sync_status = 'failed', sync_error = $1, updated_at = now() WHERE id = $2`,
-          [syncError instanceof Error ? syncError.message : String(syncError), recordId]
+      if (uploaded.length > 0) {
+        fields["验收照片"] = uploaded.map((item) => ({
+          file_token: item.file_token
+        }));
+        fields["照片信息"] = JSON.stringify(
+          uploaded.map((item) => ({ kind: item.kind, file_name: item.file_name }))
         );
       }
+
+      const responseData = await feishuRequest(
+        `${FEISHU}/open-apis/bitable/v1/apps/${process.env.FEISHU_RECEIVING_APP_TOKEN}/tables/${process.env.FEISHU_RECEIVING_TABLE_ID}/records`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json; charset=utf-8"
+          },
+          body: JSON.stringify({
+            fields
+          })
+        }
+      );
 
       res.json({
         ok: true,
         status,
-        record_id: recordId,
-        feishu_record_id: feishuRecordId,
+        record_id: responseData.data?.record?.record_id || null,
         photo_count: uploaded.length,
         operator: req.user.name
       });

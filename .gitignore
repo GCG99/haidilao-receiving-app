@@ -2,7 +2,3 @@ node_modules/
 dist/
 .env
 *.log
-
-# P1 物料/供应商快照：含真实业务数据（供应商信息/物料成本等），不进 git，
-# 需要时本地跑 server/db/seed/export_p1.py 重新生成。
-server/db/seed/data/
