@@ -1,6 +1,13 @@
 # Render 一键部署蓝图（Blueprint）
 # 用法：登录 render.com → New → Blueprint → 选择这个仓库 → Apply
 # 标记 sync:false 的变量需要在 Render 控制台手动填写（值从本地 .env 复制）
+#
+# Phase 0：数据库是唯一权威源，飞书两个 Base 退化为同步副本。
+# 首次部署这个 Blueprint 后，需要手动跑一次（Render Shell 或本地对着这个数据库跑）：
+#   npm run db:migrate   建表
+#   npm run db:seed      导入 P1 物料/供应商快照 + 供应商排班（需要先本地跑
+#                        server/db/seed/export_p1.py 生成 data/*.json，这些文件
+#                        含业务数据不进 git，见 .gitignore 里的说明）
 services:
   - type: web
     name: haidilao-receiving-app
@@ -36,3 +43,14 @@ services:
         sync: false
       - key: FEISHU_RECEIVING_TABLE_ID
         sync: false
+      # 数据库连接串：Render 会自动从下面 databases 里的实例注入，不用手填
+      - key: DATABASE_URL
+        fromDatabase:
+          name: haidilao-receiving-db
+          property: connectionString
+
+databases:
+  - name: haidilao-receiving-db
+    databaseName: haidilao_receiving_db
+    plan: 0.1c-256mb
+    region: singapore
