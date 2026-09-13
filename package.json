@@ -6,12 +6,15 @@
   "scripts": {
     "dev": "concurrently -k \"node server/index.js\" \"vite --open\"",
     "build": "vite build",
-    "start": "node server/index.js"
+    "start": "node server/index.js",
+    "db:migrate": "node server/db/migrate.js",
+    "db:seed": "node server/db/seed/load.js"
   },
   "dependencies": {
     "dotenv": "^17.2.2",
     "express": "^5.2.1",
     "multer": "^2.3.0",
+    "pg": "^8.23.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },

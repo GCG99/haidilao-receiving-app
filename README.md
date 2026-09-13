@@ -111,3 +111,35 @@ App Secret 只存在 Node.js 服务端。
 把 v4.1 和 v4.2 各自独立开发出的功能合到了一起：登录、总览看板、送货单必传
 + OCR 识别（来自 v4.1）与三选一送货流程、领鲜四块选填照片（来自 v4.2）现在
 是同一个版本。
+
+## Phase 0：独立数据库（2026-09-13）
+
+数据库现在是唯一权威源，飞书两个 Base 退化为同步副本（写数据库成功才算提交成功；
+飞书同步实时做，但失败不影响提交结果，只标 `sync_status` 留着以后补）。
+详细背景和后续阶段见 `P2_设计文档/全系统合并架构与路线图.md`。
+
+**本地开发**：
+
+```bash
+docker run -d --name haidilao-pg -e POSTGRES_PASSWORD=devpassword -e POSTGRES_DB=haidilao -p 5432:5432 postgres:16-alpine
+npm run db:migrate   # 建表（server/db/schema.sql）
+```
+
+物料/供应商字典需要从 P1 正式基线重新生成一次快照再导入（快照文件含真实业务数据，
+不进 git，见 `.gitignore`）：
+
+```bash
+python server/db/seed/export_p1.py   # 生成 server/db/seed/data/*.json
+npm run db:seed                      # 导入 Postgres，可重复运行（按主键 upsert）
+```
+
+**部署到 Render**：Apply 这个仓库的 Blueprint 会连数据库一起建好（`render.yaml`
+里的 `databases:`），`DATABASE_URL` 自动注入不用手填。但 `npm run db:seed` 需要
+本地的 `data/*.json`，Render 构建环境里没有这些文件——首次上线需要在本地把
+`DATABASE_URL` 临时指向 Render 数据库的外部连接串，跑一次 `npm run db:seed`，
+之后代码里对数据库的读写走的是同一张表，不用每次部署都重新种一次。
+
+Phase 0 目前只建了收货小程序用得上的表（`suppliers` / `supplier_delivery_schedule`
+/ `categories` / `materials` 字典 + `receiving_records` / `receiving_photos`）。
+采购单/到货验收/入库单/发票/库存流水这几张 P2 表还没建，等后续 Phase 真正需要时再加。
+照片文件本体暂时还是存在飞书 Drive，数据库只存 `file_token` 引用。
