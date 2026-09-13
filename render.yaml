@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: haidilao-receiving-app
+    env: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: FEISHU_APP_ID
+        sync: false
+      - key: FEISHU_APP_SECRET
+        sync: false
+      - key: FEISHU_REDIRECT_URI
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
+      - key: FEISHU_SUPPLIER_APP_TOKEN
+        sync: false
+      - key: FEISHU_SUPPLIER_TABLE_ID
+        sync: false
+      - key: FEISHU_RECEIVING_APP_TOKEN
+        sync: false
+      - key: FEISHU_RECEIVING_TABLE_ID
+        sync: false
+      - key: NODE_ENV
+        value: production
