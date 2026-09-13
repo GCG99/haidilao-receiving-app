@@ -1,7 +1,7 @@
 {
   "name": "haidilao-receiving-app",
   "private": true,
-  "version": "4.1.0",
+  "version": "4.3.0",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k \"node server/index.js\" \"vite --open\"",

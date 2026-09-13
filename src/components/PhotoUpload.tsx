@@ -7,9 +7,17 @@ interface Props {
   onChange: (files: File[]) => void;
   submitted?: boolean;
   uploaded?: UploadedPhoto[];
+  required?: boolean;
 }
 
-export function PhotoUpload({ title, description, onChange, submitted = false, uploaded = [] }: Props) {
+export function PhotoUpload({
+  title,
+  description,
+  onChange,
+  submitted = false,
+  uploaded = [],
+  required = true
+}: Props) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [files, setFiles] = useState<File[]>([]);
 
@@ -66,7 +74,9 @@ export function PhotoUpload({ title, description, onChange, submitted = false, u
       <div className="photo-title-row">
         <div>
           <strong>{title}</strong>
-          <span className="must">必传</span>
+          <span className={required ? "must" : "optional"}>
+            {required ? "必传" : "选填"}
+          </span>
         </div>
         <span className="camera">📷</span>
       </div>

@@ -81,6 +81,9 @@ export function SupplierCard({
 
   const locked = result.status !== "pending";
 
+  // 领鲜、北方、Cowrock 之外的供应商都用「没有送货 / 有送货·没有冻货 / 有送货·有冻货」三选一。
+  const useThreeChoice = supplier.type === "other" || supplier.type === "frozen";
+
   const hasPhoto = (id: string) =>
     (result.evidence[id]?.files.length ?? 0) > 0 ||
     (result.evidence[id]?.uploaded?.length ?? 0) > 0;
@@ -167,13 +170,19 @@ export function SupplierCard({
     }
   };
 
-  const photo = (id: string, title: string, description: string) => (
+  const photo = (
+    id: string,
+    title: string,
+    description: string,
+    required = true
+  ) => (
     <PhotoUpload
       key={id}
       title={title}
       description={description}
       submitted={result.status === "completed" || result.status === "no_goods"}
       uploaded={result.evidence[id]?.uploaded}
+      required={required}
       onChange={(files) => setPhoto(id, files)}
     />
   );
@@ -186,15 +195,9 @@ export function SupplierCard({
       ids.push("delivery_note");
     }
 
-    if (supplier.type === "frozen") {
-      if (result.hasGoods === true) {
-        ids.push("frozen_temperature", "frozen_quality");
-      }
-    }
-
-    if (supplier.type === "other") {
+    if (useThreeChoice) {
       if (result.selections.frozenGoods === true) {
-        ids.push("frozen_temperature", "frozen_quality");
+        ids.push("frozen_temperature");
       }
     }
 
@@ -223,20 +226,10 @@ export function SupplierCard({
       }
     }
 
-    if (supplier.type === "produce") {
-      if (result.selections.vegetables === true) {
-        ids.push("vegetable_arrival", "weighted_products");
-      }
-      if (result.selections.fruits === true) {
-        ids.push("fruit_sweetness");
-      }
-      if (result.selections.potato === true) {
-        ids.push("potato_inspection");
-      }
-    }
+    // 领鲜：货物状态 / 称重 / 甜度测试 / 土豆验收 四块照片均为选填，不进必传校验。
 
     return [...new Set(ids)];
-  }, [result, supplier.type]);
+  }, [result, supplier.type, useThreeChoice]);
 
   const requiredComplete = requiredIds.every(hasPhoto);
   const photoDoneCount = requiredIds.filter(hasPhoto).length;
@@ -256,7 +249,7 @@ export function SupplierCard({
     if (result.status === "completed" || result.status === "no_goods") return;
 
     if (
-      supplier.type === "other" &&
+      useThreeChoice &&
       result.selections.frozenGoods === false
     ) {
       await onSubmit(supplier, {
@@ -304,28 +297,83 @@ export function SupplierCard({
       </div>
 
       <div className="supplier-body">
-        <div className="section-title">今天有没有送货？</div>
-        <Choice
-          value={result.hasGoods}
-          yes="今天有送货"
-          no="今天没有送货"
-          onChange={(value) => {
-            if (locked) return;
-            if (value) {
-              onChange({
-                ...result,
-                hasGoods: true,
-                status: "pending"
-              });
-            } else {
-              onChange({
-                ...result,
-                hasGoods: false,
-                status: "no_goods"
-              });
-            }
-          }}
-        />
+        {useThreeChoice ? (
+          <>
+            <div className="section-title">今天的送货情况？</div>
+            <div className="choice-row choice-row-3">
+              <button
+                className={result.hasGoods === false ? "choice active" : "choice"}
+                type="button"
+                onClick={() => {
+                  if (locked) return;
+                  onChange({
+                    ...result,
+                    hasGoods: false,
+                    status: "no_goods",
+                    selections: { ...result.selections, frozenGoods: null }
+                  });
+                }}
+              >
+                没有送货
+              </button>
+              <button
+                className={
+                  result.hasGoods === true && result.selections.frozenGoods === false
+                    ? "choice active"
+                    : "choice"
+                }
+                type="button"
+                onClick={() => {
+                  if (locked) return;
+                  onChange({
+                    ...result,
+                    hasGoods: true,
+                    status: "pending",
+                    selections: { ...result.selections, frozenGoods: false }
+                  });
+                }}
+              >
+                有送货·没有冻货
+              </button>
+              <button
+                className={
+                  result.hasGoods === true && result.selections.frozenGoods === true
+                    ? "choice active"
+                    : "choice"
+                }
+                type="button"
+                onClick={() => {
+                  if (locked) return;
+                  onChange({
+                    ...result,
+                    hasGoods: true,
+                    status: "pending",
+                    selections: { ...result.selections, frozenGoods: true }
+                  });
+                }}
+              >
+                有送货·有冻货
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="section-title">今天有没有送货？</div>
+            <Choice
+              value={result.hasGoods}
+              yes="今天有送货"
+              no="今天没有送货"
+              onChange={(value) => {
+                if (locked) return;
+                onChange({
+                  ...result,
+                  hasGoods: value,
+                  status: value ? "pending" : "no_goods"
+                });
+              }}
+            />
+          </>
+        )}
 
         {result.hasGoods === true && (
           <div className="delivery-note-wrap">
@@ -348,53 +396,22 @@ export function SupplierCard({
           <div className="normal-note">今天没有送货，本供应商无需继续填写验收项目。</div>
         )}
 
-        {result.hasGoods === true && supplier.type === "other" && (
-          <>
-            <div className="section-title">今天是否有冻货？</div>
-            <Choice
-              value={result.selections.frozenGoods ?? null}
-              yes="有冻货"
-              no="今天没有冻货"
-              onChange={(value) => {
-                if (locked) return;
-                if (value) {
-                  setSelection("frozenGoods", true);
-                } else {
-                  onChange({
-                    ...result,
-                    hasGoods: true,
-                    status: "pending",
-                    selections: { ...result.selections, frozenGoods: false }
-                  });
-                }
-              }}
-            />
+        {result.hasGoods === true &&
+          useThreeChoice &&
+          result.selections.frozenGoods === true && (
+            <>
+              <Rule title="🧊 冻货收货标准" critical>
+                产品温度必须在 <b>-2℃以下</b>。发现温度异常、解冻、软化或包装异常，及时反馈管理组。
+              </Rule>
+              {photo("frozen_temperature", "冻货产品测温照片", "水印相机温度结果必须清楚可见。")}
+            </>
+          )}
 
-            {result.selections.frozenGoods === true && (
-              <>
-                <Rule title="🧊 冻货收货标准" critical>
-                  产品温度必须在 <b>-2℃以下</b>。发现温度异常、解冻、软化或包装异常，及时反馈管理组。
-                </Rule>
-                {photo("frozen_temperature", "冻货产品测温照片", "水印相机温度结果必须清楚可见。")}
-                {photo("frozen_quality", "冻货产品状态照片", "拍清楚产品状态；异常情况必须留档。")}
-              </>
-            )}
-
-            {result.selections.frozenGoods === false && (
-              <div className="normal-note">今天没有冻货，本供应商无需上传照片。</div>
-            )}
-          </>
-        )}
-
-        {result.hasGoods === true && supplier.type === "frozen" && (
-          <>
-            <Rule title="🧊 冻货收货标准" critical>
-              产品温度必须在 <b>-2℃以下</b>。温度异常、解冻、软化或包装异常，及时反馈管理组。
-            </Rule>
-            {photo("frozen_temperature", "冻货产品测温照片", "水印相机温度结果必须清楚可见。")}
-            {photo("frozen_quality", "冻货产品状态照片", "拍清楚产品状态；异常情况必须留档。")}
-          </>
-        )}
+        {result.hasGoods === true &&
+          useThreeChoice &&
+          result.selections.frozenGoods === false && (
+            <div className="normal-note">有送货但今天没有冻货，本供应商无需上传照片，可直接提交。</div>
+          )}
 
         {result.hasGoods === true && supplier.type === "meat" && (
           <>
@@ -494,53 +511,38 @@ export function SupplierCard({
 
         {result.hasGoods === true && supplier.type === "produce" && (
           <>
-            <div className="section-title">🥬 蔬菜</div>
-            <Choice
-              value={result.selections.vegetables ?? null}
-              onChange={(value) => setSelection("vegetables", value)}
-            />
-            {result.selections.vegetables === true && (
-              <>
-                <Rule title="蔬菜收货要求">
-                  每一款蔬菜到货时均需拍照留档。以下产品按重量叫货，收货时必须实际称重。
-                </Rule>
-                <div className="fixed-list">
-                  <strong>按重量叫货产品</strong>
-                  {weightedFreshProducts.map((item) => <span key={item}>{item}</span>)}
-                </div>
-                {photo("vegetable_arrival", "蔬菜到货照片", "每一款蔬菜均需上传水印相机照片，可以多张。")}
-                {photo("weighted_products", "按重量叫货产品称重照片", "以上按重量产品收货时必须称重并拍水印相机照片，可以多张。")}
-              </>
+            <Rule title="🥬 领鲜收货照片">
+              以下四类照片均为选填，按当天实际到货情况上传，可上传多张。
+              <br />
+              甜度测试需在水果到货后 <b>2小时内</b>完成；土豆须拆袋查看实际产品状态后再拍。
+            </Rule>
+            {photo(
+              "produce_status",
+              "货物状态照片",
+              "选填：拍清楚各款货物到货状态，可上传多张。",
+              false
             )}
-
-            <div className="section-title">🍉 水果</div>
-            <Choice
-              value={result.selections.fruits ?? null}
-              onChange={(value) => setSelection("fruits", value)}
-            />
-            {result.selections.fruits === true && (
-              <>
-                <Rule title="⏱ 水果甜度测试" critical>
-                  必须在水果到货后 <b>2小时内</b>完成甜度测试。
-                  <br />
-                  测试完成后上传水印相机拍摄的甜度照片。
-                </Rule>
-                {photo("fruit_sweetness", "水果甜度测试照片", "这里上传甜度测试照片，可上传多张。")}
-              </>
+            <div className="fixed-list">
+              <strong>按重量叫货产品（收货须实际称重）</strong>
+              {weightedFreshProducts.map((item) => <span key={item}>{item}</span>)}
+            </div>
+            {photo(
+              "produce_weight",
+              "称重照片",
+              "选填：按重量叫货产品收货时称重并拍水印相机照片，可上传多张。",
+              false
             )}
-
-            <div className="section-title">🥔 土豆</div>
-            <Choice
-              value={result.selections.potato ?? null}
-              onChange={(value) => setSelection("potato", value)}
-            />
-            {result.selections.potato === true && (
-              <>
-                <Rule title="🥔 土豆必须拆袋验货" critical>
-                  不得只检查外包装，必须拆袋查看实际产品状态，拆袋后使用水印相机拍照留档。
-                </Rule>
-                {photo("potato_inspection", "土豆拆袋验货照片", "请上传拆袋后的实际产品状态照片，可以多张。")}
-              </>
+            {photo(
+              "fruit_sweetness",
+              "甜度测试照片",
+              "选填：水果甜度测试完成后上传水印相机照片，可上传多张。",
+              false
+            )}
+            {photo(
+              "potato_inspection",
+              "土豆验收照片",
+              "选填：土豆拆袋后拍实际产品状态照片，可上传多张。",
+              false
             )}
           </>
         )}

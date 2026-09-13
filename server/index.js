@@ -75,15 +75,14 @@ const photoLabels = {
   northern_fresh_weight: "鲜切肉_称重",
   northern_fresh_temperature: "鲜切肉_测温",
   frozen_temperature: "冻货_测温",
-  frozen_quality: "冻货_状态",
   fresh_weight: "鲜切肉_称重",
   fresh_temperature: "鲜切肉_测温",
   frozen_meat_weight: "冻肉_称重",
   frozen_meat_temperature: "冻肉_测温",
-  vegetable_arrival: "蔬菜_到货",
-  weighted_products: "按重量产品_称重",
-  fruit_sweetness: "水果_甜度",
-  potato_inspection: "土豆_拆袋验货"
+  produce_status: "领鲜_货物状态",
+  produce_weight: "领鲜_称重",
+  fruit_sweetness: "领鲜_甜度测试",
+  potato_inspection: "领鲜_土豆验收"
 };
 
 const upload = multer({

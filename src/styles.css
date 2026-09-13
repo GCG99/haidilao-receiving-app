@@ -59,6 +59,7 @@ h1 { margin:4px 0 3px; font-size:25px; }
 .section-title { margin-top:15px; font-size:14px; font-weight:700; }
 .section-title.small { margin-top:10px; }
 .choice-row { display:flex; flex-wrap:wrap; gap:8px; margin-top:7px; }
+.choice-row-3 .choice { flex:1 1 30%; text-align:center; }
 .choice { min-width:90px; border:1px solid #ddd; background:#fff; border-radius:9px; padding:10px 13px; }
 .choice.active { background:#171717; border-color:#171717; color:#fff; }
 
@@ -213,6 +214,7 @@ h1 { margin:4px 0 3px; font-size:25px; }
 }
 
 .delivery-note-wrap { margin-top: 2px; }
+.optional { margin-left:6px; color:#777; background:#f1f1f1; border-radius:7px; padding:3px 5px; font-size:9px; }
 
 .overview-link {
   display:block;
