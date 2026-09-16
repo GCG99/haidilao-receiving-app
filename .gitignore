@@ -2,3 +2,5 @@ node_modules/
 dist/
 .env
 *.log
+server/storage/local-uploads/
+server/db/seed/data/
