@@ -1026,6 +1026,59 @@ app.post(
   }
 );
 
+/* =========================
+   录单工作台 / Invoice / Credit / ERP入库单（第一阶段新增）
+   与上面的收货/登录/OCR/照片功能完全独立、互不调用。
+
+   关键点：这些新路由需要 Postgres，而现有收货功能完全不需要。
+   如果在这里用静态 `import "./db/pool.js"`，一旦 DATABASE_URL 没配置，
+   pool.js 会在模块加载时就 throw，导致整个进程启动失败——
+   会把跟数据库毫无关系的收货/登录/OCR/照片功能也一起拖垮。
+   所以这里改用条件式动态 import：没有 DATABASE_URL 时，
+   这几个新路径整体返回 503（说明原因），其余功能完全不受影响。
+   ========================= */
+if (process.env.DATABASE_URL) {
+  const [
+    { createInvoicesRouter },
+    { createErpReceiptsRouter },
+    { createCreditsRouter },
+    { createMaterialsRouter },
+    { createAuditLogsRouter },
+    { createStatementsRouter },
+    { createWorkbenchRouter }
+  ] = await Promise.all([
+    import("./routes/invoices.js"),
+    import("./routes/erpReceipts.js"),
+    import("./routes/credits.js"),
+    import("./routes/materials.js"),
+    import("./routes/auditLogs.js"),
+    import("./routes/statements.js"),
+    import("./routes/workbench.js")
+  ]);
+
+  app.use("/api/invoices", createInvoicesRouter({ requireLogin }));
+  app.use("/api/erp-receipts", createErpReceiptsRouter({ requireLogin }));
+  app.use("/api/credits", createCreditsRouter({ requireLogin }));
+  app.use("/api/materials", createMaterialsRouter({ requireLogin }));
+  app.use("/api/audit-logs", createAuditLogsRouter({ requireLogin }));
+  app.use("/api/statements", createStatementsRouter({ requireLogin }));
+  app.use("/api/workbench", createWorkbenchRouter({ requireLogin }));
+
+  console.log("录单工作台（Invoice/Credit/ERP入库单）已启用（检测到 DATABASE_URL）。");
+} else {
+  const notConfigured = (_req, res) => {
+    res.status(503).json({
+      code: "DATABASE_NOT_CONFIGURED",
+      message: "录单工作台功能需要 Postgres，当前环境未配置 DATABASE_URL。收货/登录等其他功能不受影响。"
+    });
+  };
+  for (const base of ["/api/invoices", "/api/erp-receipts", "/api/credits", "/api/materials", "/api/audit-logs", "/api/statements", "/api/workbench"]) {
+    app.use(base, notConfigured);
+  }
+
+  console.log("未检测到 DATABASE_URL：录单工作台相关路由已禁用（返回503），收货等现有功能不受影响。");
+}
+
 const distPath = path.join(process.cwd(), "dist");
 
 if (fs.existsSync(distPath)) {
