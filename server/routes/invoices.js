@@ -1,9 +1,16 @@
 import express from "express";
 import multer from "multer";
 import { pool, withTransaction } from "../db/pool.js";
-import { storeFile } from "../storage/fileStorageService.js";
+import { storeFile, getFileById, getFileBuffer } from "../storage/fileStorageService.js";
 import { writeAuditLog, auditContextFromRequest } from "../services/auditService.js";
 import { suggestMatchesForInvoice } from "../services/matchingService.js";
+import {
+  updateInvoiceFields,
+  replaceInvoiceItems,
+  markInvoiceParseFailed,
+  checkInvoiceConsistency
+} from "../services/invoiceService.js";
+import { parseInvoiceDocument, isOcrConfigured } from "../services/ocrParsingService.js";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -121,6 +128,106 @@ export function createInvoicesRouter({ requireLogin }) {
     }
   });
 
+  // Step 3（识别，OCR自动路径）：拿视觉LLM解析上传时存的文件，解析结果走跟人工回填(/fields、/items)
+  // 同一段共享写入逻辑。跟upload分两步、不阻塞上传本身的响应（第6轮ChatGPT复核方向）。
+  router.post("/:id/parse", requireLogin, async (req, res) => {
+    if (!isOcrConfigured()) {
+      return res.status(503).json({
+        code: "OCR_NOT_CONFIGURED",
+        message: "OCR解析功能需要配置 ANTHROPIC_API_KEY，当前未配置。可以走人工录入(/fields、/items)。"
+      });
+    }
+
+    const auditContext = auditContextFromRequest(req);
+
+    try {
+      const { rows: invoiceRows } = await pool.query("SELECT * FROM invoices WHERE id = $1", [req.params.id]);
+      if (invoiceRows.length === 0) {
+        return res.status(404).json({ message: "找不到这张发票。" });
+      }
+      const invoice = invoiceRows[0];
+      if (!invoice.source_file_id) {
+        return res.status(400).json({ message: "这张发票没有关联的源文件，没法解析。" });
+      }
+
+      const sourceFile = await getFileById(invoice.source_file_id);
+      const buffer = await getFileBuffer(sourceFile);
+
+      let parsed;
+      try {
+        parsed = await parseInvoiceDocument(buffer, sourceFile.mime_type);
+      } catch (parseError) {
+        // 调用失败（超时/限流/服务不可用）：第9轮结论，不做自动重试，标记异常状态让人工点按钮重试。
+        const failResult = await withTransaction((client) => markInvoiceParseFailed(client, req.params.id, parseError.message, auditContext));
+        return res.status(502).json({
+          code: "OCR_CALL_FAILED",
+          message: `调用OCR解析失败：${parseError.message}`,
+          invoice: failResult.invoice
+        });
+      }
+
+      if (!parsed.is_invoice) {
+        const failResult = await withTransaction((client) => markInvoiceParseFailed(client, req.params.id, parsed.notes, auditContext));
+        return res.status(422).json({
+          code: "NOT_AN_INVOICE",
+          message: "模型判断这份文件不像是一张发票，请人工核实。",
+          notes: parsed.notes,
+          invoice: failResult.invoice
+        });
+      }
+
+      const warnings = checkInvoiceConsistency(parsed.header);
+
+      const result = await withTransaction(async (client) => {
+        const fieldsResult = await updateInvoiceFields(
+          client,
+          req.params.id,
+          {
+            invoice_no: parsed.header.invoice_no, invoice_date: parsed.header.invoice_date,
+            due_date: parsed.header.due_date, invoice_type: parsed.header.invoice_type,
+            currency: parsed.header.currency, subtotal: parsed.header.subtotal, gst: parsed.header.gst,
+            total_amount: parsed.header.total_amount, ocr_confidence: parsed.header.confidence,
+            parser_version: "claude-sonnet-5"
+          },
+          auditContext
+        );
+        if (fieldsResult.conflict || fieldsResult.notFound) {
+          return fieldsResult;
+        }
+
+        const itemsResult = await replaceInvoiceItems(
+          client,
+          req.params.id,
+          (parsed.items || []).map((item) => ({ ...item, ocr_line_confidence: item.confidence ?? null })),
+          auditContext
+        );
+
+        return { invoice: fieldsResult.invoice, items: itemsResult.items };
+      });
+
+      if (result.conflict) {
+        return res.status(409).json({
+          code: "DUPLICATE_INVOICE_NO",
+          message: "OCR识别出的发票号跟已有发票冲突，请人工确认是否重复上传。",
+          existing_invoice: result.conflict
+        });
+      }
+      if (result.notFound) {
+        return res.status(404).json({ message: "找不到这张发票。" });
+      }
+
+      res.json({
+        invoice: result.invoice,
+        items: result.items,
+        warnings,
+        ocr_notes: parsed.notes,
+        source_quotes: { header: parsed.header.source_quotes || null }
+      });
+    } catch (error) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // Step 3（识别）：人工或 OCR/解析结果回填表头字段。这个阶段第一次真正确定 invoice_no，
   // 是唯一约束 (supplier_id, invoice_no) 会被触发的地方——因此不能让它变成一个用户看不懂的 500。
   router.post("/:id/fields", requireLogin, async (req, res) => {
@@ -129,77 +236,26 @@ export function createInvoicesRouter({ requireLogin }) {
       ocr_confidence: ocrConfidence, parser_version: parserVersion } = req.body;
 
     try {
-      let conflict = null;
+      const result = await withTransaction((client) => updateInvoiceFields(
+        client,
+        req.params.id,
+        { invoice_no: invoiceNo, invoice_date: invoiceDate, due_date: dueDate, invoice_type: invoiceType,
+          currency, subtotal, gst, total_amount: totalAmount, ocr_confidence: ocrConfidence, parser_version: parserVersion },
+        auditContextFromRequest(req)
+      ));
 
-      const updated = await withTransaction(async (client) => {
-        const { rows: existingRows } = await client.query(
-          "SELECT * FROM invoices WHERE id = $1 FOR UPDATE",
-          [req.params.id]
-        );
-        if (existingRows.length === 0) {
-          return null;
-        }
-        const before = existingRows[0];
-
-        if (invoiceNo) {
-          const { rows: conflictRows } = await client.query(
-            "SELECT * FROM invoices WHERE supplier_id = $1 AND invoice_no = $2 AND id <> $3",
-            [before.supplier_id, invoiceNo, before.id]
-          );
-          if (conflictRows.length > 0) {
-            // 按第7轮讨论：不静默吞掉、也不直接500——把已存在的那张发票原样返回，
-            // 由前端提示"检测到可能重复"，让人工确认是重复上传还是需要修正单号。
-            conflict = conflictRows[0];
-            return null;
-          }
-        }
-
-        const { rows: updatedRows } = await client.query(
-          `UPDATE invoices SET
-             invoice_no = COALESCE($1, invoice_no),
-             invoice_date = COALESCE($2, invoice_date),
-             due_date = COALESCE($3, due_date),
-             invoice_type = COALESCE($4, invoice_type),
-             currency = COALESCE($5, currency),
-             subtotal = COALESCE($6, subtotal),
-             gst = COALESCE($7, gst),
-             total_amount = COALESCE($8, total_amount),
-             ocr_confidence = COALESCE($9, ocr_confidence),
-             parser_version = COALESCE($10, parser_version),
-             status = CASE WHEN status = 'new' THEN 'parsed' ELSE status END,
-             updated_at = now()
-           WHERE id = $11
-           RETURNING *`,
-          [invoiceNo, invoiceDate, dueDate, invoiceType, currency, subtotal, gst, totalAmount, ocrConfidence, parserVersion, req.params.id]
-        );
-
-        await writeAuditLog(
-          {
-            ...auditContextFromRequest(req),
-            action: "update",
-            entityType: "invoice",
-            entityId: before.id,
-            beforeJson: before,
-            afterJson: updatedRows[0]
-          },
-          client
-        );
-
-        return updatedRows[0];
-      });
-
-      if (conflict) {
+      if (result.conflict) {
         return res.status(409).json({
           code: "DUPLICATE_INVOICE_NO",
           message: "这个供应商+发票号已经存在，请确认是重复上传还是需要修正发票号。",
-          existing_invoice: conflict
+          existing_invoice: result.conflict
         });
       }
-      if (!updated) {
+      if (result.notFound) {
         return res.status(404).json({ message: "找不到这张发票。" });
       }
 
-      res.json({ invoice: updated });
+      res.json({ invoice: result.invoice });
     } catch (error) {
       if (error.code === "23505") {
         return res.status(409).json({ code: "DUPLICATE_INVOICE_NO", message: "发票号冲突，请人工确认。" });
@@ -215,56 +271,18 @@ export function createInvoicesRouter({ requireLogin }) {
     const items = Array.isArray(req.body.items) ? req.body.items : [];
 
     try {
-      const notFound = await withTransaction(async (client) => {
-        const { rows: invoiceRows } = await client.query(
-          "SELECT id FROM invoices WHERE id = $1 FOR UPDATE",
-          [req.params.id]
-        );
-        if (invoiceRows.length === 0) return true;
+      const result = await withTransaction((client) => replaceInvoiceItems(
+        client,
+        req.params.id,
+        items,
+        auditContextFromRequest(req)
+      ));
 
-        await client.query("DELETE FROM invoice_items WHERE invoice_id = $1", [req.params.id]);
-
-        for (let i = 0; i < items.length; i++) {
-          const item = items[i];
-          await client.query(
-            `INSERT INTO invoice_items
-               (invoice_id, line_no, supplier_item_name, supplier_item_code, description, material_id,
-                quantity, unit, unit_price, amount, gst_rate, gst_amount, delivery_docket_no, purchase_order_no,
-                match_status, match_confidence)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
-            [
-              req.params.id, item.line_no ?? i + 1, item.supplier_item_name || null, item.supplier_item_code || null,
-              item.description || null, item.material_id || null, item.quantity ?? null, item.unit || null,
-              item.unit_price ?? null, item.amount ?? null, item.gst_rate ?? null, item.gst_amount ?? null,
-              item.delivery_docket_no || null, item.purchase_order_no || null,
-              item.material_id ? "matched" : "unmatched", item.match_confidence ?? null
-            ]
-          );
-        }
-
-        await writeAuditLog(
-          {
-            ...auditContextFromRequest(req),
-            action: "update",
-            entityType: "invoice_items",
-            entityId: req.params.id,
-            afterJson: { item_count: items.length }
-          },
-          client
-        );
-
-        return false;
-      });
-
-      if (notFound) {
+      if (result.notFound) {
         return res.status(404).json({ message: "找不到这张发票。" });
       }
 
-      const { rows } = await pool.query(
-        "SELECT * FROM invoice_items WHERE invoice_id = $1 ORDER BY line_no NULLS LAST, id",
-        [req.params.id]
-      );
-      res.json({ items: rows });
+      res.json({ items: result.items });
     } catch (error) {
       res.status(500).json({ message: error.message });
     }
