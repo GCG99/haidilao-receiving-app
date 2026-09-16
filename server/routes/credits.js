@@ -1,0 +1,181 @@
+import express from "express";
+import multer from "multer";
+import { pool, withTransaction } from "../db/pool.js";
+import { storeFile } from "../storage/fileStorageService.js";
+import { writeAuditLog, auditContextFromRequest } from "../services/auditService.js";
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const allowed = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
+    if (!allowed.includes(file.mimetype)) return cb(new Error("只支持 PDF / JPEG / PNG / WEBP 格式。"));
+    cb(null, true);
+  }
+});
+
+export function createCreditsRouter({ requireLogin }) {
+  const router = express.Router();
+
+  router.get("/", requireLogin, async (req, res) => {
+    try {
+      const { supplier_id: supplierId, status } = req.query;
+      const conditions = [];
+      const params = [];
+      if (supplierId) { params.push(supplierId); conditions.push(`supplier_id = $${params.length}`); }
+      if (status) { params.push(status); conditions.push(`status = $${params.length}`); }
+      const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+      const { rows } = await pool.query(
+        `SELECT * FROM credits ${where} ORDER BY created_at DESC LIMIT 200`,
+        params
+      );
+      res.json({ credits: rows });
+    } catch (error) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // 来源：邮箱自动发现（未来）或微信手动上传（现在）。这里先只做手动上传这一条路径。
+  router.post("/upload", requireLogin, upload.single("file"), async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "没有收到文件。" });
+      const supplierId = req.body.supplier_id;
+      if (!supplierId) return res.status(400).json({ message: "缺少 supplier_id。" });
+
+      const { file: sourceFile, reused } = await storeFile(req.file.buffer, {
+        fileName: req.file.originalname,
+        mimeType: req.file.mimetype,
+        uploadedBy: req.user.name
+      });
+
+      const credit = await withTransaction(async (client) => {
+        const { rows } = await client.query(
+          `INSERT INTO credits (supplier_id, credit_note_no, status, source, source_file_id)
+           VALUES ($1, NULL, 'new', 'wechat_manual_upload', $2)
+           RETURNING *`,
+          [supplierId, sourceFile.id]
+        );
+        const created = rows[0];
+
+        await writeAuditLog(
+          { ...auditContextFromRequest(req), action: "create", entityType: "credit", entityId: created.id, afterJson: created },
+          client
+        );
+
+        return created;
+      });
+
+      res.json({ credit, source_file: sourceFile, file_reused: reused });
+    } catch (error) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  router.get("/:id", requireLogin, async (req, res) => {
+    try {
+      const { rows } = await pool.query("SELECT * FROM credits WHERE id = $1", [req.params.id]);
+      if (rows.length === 0) return res.status(404).json({ message: "找不到这条 Credit。" });
+      res.json({ credit: rows[0] });
+    } catch (error) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // 人工确认识别出来的字段（Credit 不强制要求 invoice_id，可能只有 docket/statement 关联）。
+  router.post("/:id/confirm", requireLogin, async (req, res) => {
+    const { credit_note_no: creditNoteNo, credit_date: creditDate, invoice_id: invoiceId,
+      delivery_docket_no: docketNo, receiving_record_id: receivingRecordId, reason, total_amount: totalAmount } = req.body;
+
+    try {
+      let conflict = null;
+
+      const updated = await withTransaction(async (client) => {
+        const { rows: existingRows } = await client.query(
+          "SELECT * FROM credits WHERE id = $1 FOR UPDATE",
+          [req.params.id]
+        );
+        if (existingRows.length === 0) return null;
+        const before = existingRows[0];
+
+        if (creditNoteNo) {
+          const { rows: conflictRows } = await client.query(
+            "SELECT id FROM credits WHERE supplier_id = $1 AND credit_note_no = $2 AND id <> $3",
+            [before.supplier_id, creditNoteNo, before.id]
+          );
+          if (conflictRows.length > 0) {
+            conflict = conflictRows[0];
+            return null;
+          }
+        }
+
+        const { rows } = await client.query(
+          `UPDATE credits SET
+             credit_note_no = COALESCE($1, credit_note_no),
+             credit_date = COALESCE($2, credit_date),
+             invoice_id = COALESCE($3, invoice_id),
+             delivery_docket_no = COALESCE($4, delivery_docket_no),
+             receiving_record_id = COALESCE($5, receiving_record_id),
+             reason = COALESCE($6, reason),
+             total_amount = COALESCE($7, total_amount),
+             status = CASE WHEN status = 'new' THEN 'pending_review' ELSE status END,
+             updated_at = now()
+           WHERE id = $8
+           RETURNING *`,
+          [creditNoteNo, creditDate, invoiceId, docketNo, receivingRecordId, reason, totalAmount, req.params.id]
+        );
+
+        await writeAuditLog(
+          { ...auditContextFromRequest(req), action: "confirm", entityType: "credit", entityId: req.params.id, beforeJson: before, afterJson: rows[0] },
+          client
+        );
+
+        return rows[0];
+      });
+
+      if (conflict) {
+        return res.status(409).json({
+          code: "DUPLICATE_CREDIT_NO",
+          message: "这个供应商+Credit号已经存在，请确认是否重复上传。",
+          existing_credit_id: conflict.id
+        });
+      }
+      if (!updated) return res.status(404).json({ message: "找不到这条 Credit。" });
+
+      res.json({ credit: updated });
+    } catch (error) {
+      if (error.code === "23505") {
+        return res.status(409).json({ code: "DUPLICATE_CREDIT_NO", message: "Credit 号冲突，请人工确认。" });
+      }
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // 人工在海底捞 ERP 里手动录入这条 Credit 之后，回来标记"已录入"——系统从不自动操作 ERP。
+  router.post("/:id/mark-entered", requireLogin, async (req, res) => {
+    try {
+      const credit = await withTransaction(async (client) => {
+        const { rows } = await client.query(
+          `UPDATE credits SET status = 'entered_to_erp', entered_to_erp_at = now(), entered_to_erp_by = $1, updated_at = now()
+           WHERE id = $2 RETURNING *`,
+          [req.user.name, req.params.id]
+        );
+        if (rows.length === 0) return null;
+
+        await writeAuditLog(
+          { ...auditContextFromRequest(req), action: "enter_erp", entityType: "credit", entityId: req.params.id, afterJson: rows[0] },
+          client
+        );
+
+        return rows[0];
+      });
+
+      if (!credit) return res.status(404).json({ message: "找不到这条 Credit。" });
+      res.json({ credit });
+    } catch (error) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  return router;
+}
