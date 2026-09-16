@@ -81,3 +81,22 @@ export async function uploadFileToFeishuDrive(buffer, fileName, mimeType) {
 
   return { storagePath: fileToken };
 }
+
+// OCR解析需要拿回文件原始字节（之前只有上传，没有下载——这次做OCR才发现的缺口）。
+// fileToken 就是 uploadFileToFeishuDrive 返回的 storagePath。
+export async function downloadFileFromFeishuDrive(fileToken) {
+  const token = await getTenantAccessToken();
+
+  const response = await fetch(`${FEISHU}/open-apis/drive/v1/medias/${fileToken}/download`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${token}` }
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`从飞书 Drive 下载文件失败 ${response.status}: ${text}`);
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  return Buffer.from(arrayBuffer);
+}

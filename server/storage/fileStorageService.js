@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pool } from "../db/pool.js";
-import { uploadFileToFeishuDrive } from "../integrations/feishu/driveClient.js";
+import { uploadFileToFeishuDrive, downloadFileFromFeishuDrive } from "../integrations/feishu/driveClient.js";
 
 // 生产环境必须用 feishu（Render 磁盘非持久化，重启/重新部署会丢文件——原始单据不能存在那上面）。
 // local 只给本地开发/测试用，默认值特意保守。
@@ -69,4 +69,13 @@ export async function storeFile(buffer, { fileName, mimeType, uploadedBy = null 
 export async function getFileById(id) {
   const { rows } = await pool.query("SELECT * FROM source_files WHERE id = $1", [id]);
   return rows[0] || null;
+}
+
+// OCR解析需要读回文件原始字节。跟 storeFile() 一样按 storage_provider 分支，
+// 路由层不需要关心底层是本地磁盘还是飞书Drive。
+export async function getFileBuffer(sourceFile) {
+  if (sourceFile.storage_provider === "feishu") {
+    return downloadFileFromFeishuDrive(sourceFile.storage_path);
+  }
+  return fs.readFileSync(sourceFile.storage_path);
 }
