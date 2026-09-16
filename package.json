@@ -9,6 +9,7 @@
     "start": "node server/index.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.126.0",
     "dotenv": "^17.2.2",
     "express": "^5.2.1",
     "multer": "^2.3.0",
