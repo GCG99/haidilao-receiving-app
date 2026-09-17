@@ -100,9 +100,23 @@
   - `仅复制-4月发票校验总表.xlsx`：项目里**没有另一份"4月发票校验总表.xlsx"可以比对**——这不是真正的重复文件问题，只是命名带"仅复制"前缀但没有对应的"正式版"存在，可以直接当4月的唯一数据源用。
   - **新发现的疑点**(原扫描报告没找到)：`7月/7月发票校验总表.xlsx`与`7月/7月发票校验总表带BNE.xlsx`——文件名暗示后者"多了BNE"，但实际对比两份文件的**sheet列表完全相同**(都是25个供应商sheet，都已经有"B&E"这个sheet)，真正的差异是其中一个sheet的名字："Coworkc" vs "Cowrock"(这两个是suppliers表里两个不同的真实供应商，不是拼写变体)。"带BNE"这个文件名看起来是误导性的/或者指的是sheet内部某处内容而非sheet列表本身，具体两份文件对应sheet的行内容是否有差异**没有逐行核对**，需要之后清洗7月发票校验总表数据时专门处理，本轮只做了结构层面的发现。
 - [x] **炒料原料统计表.xlsx schema定位**：打开确认是"AU6D X月炒料加工产品原材料和辅料统计表"，108行×59列的宽表，品名+多个产品列的原料用量矩阵——**是配方/BOM性质的数据，不是交易记录**，当前migrations 0001-0010没有任何表能承接这种数据(最接近的是ERP设计文档里提到但还没建的"E3生产工单/炒料成本核算"模块)。**结论：不强行塞进现有表，这是一张全新表(配方/BOM表)的设计需求，留给用户决定是否现在需要做，不是这批清洗能顺手带上的**。
-- [ ] 前端"录单工作台"UI——线B现在纯后端API，员工没有网页可以点，这是当前最大的"能不能真正用起来"的缺口
+- [x] **8月供应商Invoice PDF批量OCR导入，带去重合并**——2026-09-18完成：`AU6D8月/`下27个供应商文件夹(排除SUPAGAS无独立发票文件)，脚本`server/db/seed/import_p2_august_invoices_ocr.mjs`(复用`ocrParsingService.js`，不重写OCR逻辑)。因为8月发票校验总表.xlsx已经把这批发票的表头导入过(149条，无明细行)，这批PDF本质是同一批发票的原始单据，专门做了去重合并：
+  - 按`(supplier_id, invoice_no)`匹配到已有表头记录、且该记录当前0条`invoice_items`的 → **不新建发票，把OCR识别出的明细行直接补挂到已有表头上**：7条(Coles/Funglea/JFC/Reward/Unesco/珍珠红/老北方)
+  - 完全没有匹配到已有记录的 → 当全新发票插入(表头+明细)：12条
+  - 供应商文件夹名在`suppliers`表无精确匹配 → pending，7条(DISCOUNT SOLUTIONS/FRIENDSHIP/FUJA/HAC/Sunstae/YUENS，大概率是大小写/命名差异，不是没有这个供应商)
+  - OCR结构化解析失败 → 2条(CFC/SKYJ，报错信息和7月SKYJ那次一样"缺少必要字段，可能是文档渲染问题")
+  - 独立SQL验证：`invoices`表`source='p2_historical_ocr'`总数=36(7月24+8月12，与两批脚本各自输出加总一致)
+  - 本地commit `33d7936`，`git log origin/main..HEAD`确认5个commit全部未push、未碰生产库
+
+- [x] **前端"录单工作台"UI核心流程**——2026-09-18完成第一版：`src/components/WorkbenchPage.tsx`，挂载在`/workbench`路径(`main.tsx`按路径名分发，跟现有`/overview`用同一套模式，没有引入新的路由库)。核心流程：首页(待录单/待匹配/待Credit录入/异常四块汇总，复用已有的`GET /api/workbench`)→发票列表(按状态筛选)→点开一张→AI识别(OCR)/查找匹配候选/人工确认匹配/确认完成，一条链走完；上传发票走弹窗选供应商+选文件。UI上OCR识别置信度会明确标成"AI识别结果，非人工核实，供参考"，不假装是确定事实。
+  - 新增一个小接口`GET /api/workbench/suppliers`(供应商全量列表，供上传时选择用，之前没有任何路由暴露这个)。
+  - **本轮范围内没做**：Credit单/供应商对账单(supplier_statements)/审计日志的独立UI页面、手动逐项录入发票明细(目前只有AI识别路径，没做人工回填表单)——核心Invoice流程先做扎实，其余留后续。
+  - 实测验证：`npx tsc --noEmit`0错误，`npx vite build`构建成功(257KB/gzip 80KB)，**本地起了一次真实服务器**(`node server/index.js`，`DATABASE_URL`指向本地`haidilao-pg`)，`curl`验证`GET /workbench`返回200(页面能访问到)、`GET /api/workbench`和`GET /api/invoices`未登录返回401(证明登录校验生效，不是漏了鉴权)。测试完已停掉本地服务器进程。
+  - **这一批是在"fork worker不能再嵌套开fork"报错之后，直接在当前会话里做的，没有走ChatGPT复核**(llm-handoff连接中途断了，跟receiving-app项目memory里记录过的断线模式一样)——UI设计决策本身比较保守(复用现有代码风格/路由方式，没有引入新框架)，风险不高，但用户如果想让ChatGPT补一轮审视这版UI，下次可以专门再过一轮。
+  - 本地commit：见下方commit hash，**未push、未碰生产库**。
 - [ ] `receiving_items`表接入现有收货App的实际提交流程(现在收货还是只写飞书，没写这张已经建好的新表)
 - [ ] 新增的`order_requests`/`stock_ledger`/`stocktake_records`同样还没接入任何路由/前端——目前只是表结构+视图，跟`receiving_items`当初的情况一样是"干净的预留表"，不是半成品；接入顺序留给用户决定
-- [ ] 这批migration+清洗脚本只在本地commit(`a257ec2`及之前的`5c8ea4a`/`831fabb`)，**未push、未部署Render**——push前需要用户单独确认，同一贯的规矩
+- [ ] 这批migration+清洗脚本只在本地commit(`33d7936`/`b3156cc`/`a257ec2`/`5c8ea4a`/`831fabb`)，**未push、未部署Render**——push前需要用户单独确认，同一贯的规矩
+- [ ] 仍未做：炒料原料统计表.xlsx(需要新建BOM/配方表，独立设计工作)、7月发票校验总表的两份疑似文件(Coworkc/Cowrock那处发现，需要逐行核对)、盘点/目录下4-8月其余月份的正式盘点导出(这次只做了7月)、pending清单里16条记录(8月spreadsheet的9条+8月PDF的7条)的后续处理(等用户看完给方向)
 
-以上"前端录单工作台UI"、"`receiving_items`接入"、"新表接入路由"均未动工；历史数据清洗已开第一批(发票+盘点)，PDF发票OCR批量导入、炒料原料统计表、pending清单9条后续处理留待下一轮，具体实施顺序等用户决定。
+以上"前端录单工作台UI"、"`receiving_items`接入"、"新表接入路由"均未动工；历史数据清洗第一批(发票+盘点)+第二批(7月/8月发票PDF OCR)已完成，具体实施顺序等用户决定。

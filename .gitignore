@@ -4,3 +4,7 @@ dist/
 *.log
 server/storage/local-uploads/
 server/db/seed/data/
+
+# 库管P1数据清洗管道(设计文档+确认包/基线/白名单+scripts) — 真实业务数据(供应商/物料/价格)，
+# 2026-09-18从 C:\Users\18426\Desktop\库管\项目\haidilao-receiving-app 挪到这里后新增，绝不能进这个GitHub仓库
+库管数据/

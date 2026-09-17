@@ -56,5 +56,16 @@ export function createWorkbenchRouter({ requireLogin }) {
     }
   });
 
+  // 供应商全量列表(Postgres suppliers表，不是按日期过滤的飞书配送计划)，
+  // 给"录单工作台"上传发票时选供应商用。
+  router.get("/suppliers", requireLogin, async (req, res) => {
+    try {
+      const { rows } = await pool.query("SELECT id, name FROM suppliers ORDER BY name");
+      res.json({ suppliers: rows });
+    } catch (error) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   return router;
 }

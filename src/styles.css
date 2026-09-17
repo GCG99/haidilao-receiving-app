@@ -267,3 +267,31 @@ h1 { margin:4px 0 3px; font-size:25px; }
 .missing-chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:9px; }
 .chip { background:#fff0ec; color:#a34f3d; border-radius:7px; padding:5px 8px; font-size:11px; }
 .all-done-note { margin-top:9px; color:#2d7a45; font-size:12px; }
+
+/* ---- 录单工作台 (/workbench) ---- */
+.wb-card { background:#fff; border:1px solid #e8e8e8; border-radius:14px; padding:14px; margin-bottom:12px; }
+.wb-card h4 { margin:0 0 10px; font-size:14px; }
+.wb-filters { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
+.wb-filters button { font-size:12px; padding:7px 12px; }
+.wb-invoice-row { display:flex; justify-content:space-between; align-items:center; cursor:pointer; }
+.wb-invoice-row:hover { border-color:#b5ccdd; }
+.wb-invoice-row > div:first-child { display:flex; flex-direction:column; gap:4px; }
+.wb-amount { font-size:15px; font-weight:600; }
+.wb-badge { display:inline-block; background:#f0f0f0; color:#666; border-radius:7px; padding:2px 8px; font-size:11px; margin-left:8px; }
+.wb-badge-ok { background:#e3f4e7; color:#2d7a45; }
+.wb-badge-warn { background:#fff0ec; color:#a34f3d; }
+.wb-detail-head { display:flex; justify-content:space-between; align-items:flex-start; }
+.wb-fields { display:flex; flex-direction:column; gap:4px; margin-top:8px; font-size:12px; color:#666; }
+.wb-confidence { color:#9d5d00; }
+.wb-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.wb-candidate { display:flex; justify-content:space-between; align-items:center; gap:10px; border:1px solid #edc6b7; border-radius:12px; padding:10px 12px; margin-bottom:8px; }
+.wb-candidate > div { display:flex; flex-direction:column; gap:3px; font-size:12px; }
+.wb-candidate strong { font-size:13px; }
+.wb-candidate em { color:#888; font-style:normal; }
+.wb-table { width:100%; border-collapse:collapse; font-size:12px; }
+.wb-table th, .wb-table td { text-align:left; padding:7px 6px; border-bottom:1px solid #eee; }
+.wb-error { color:#a34f3d; font-size:12px; }
+.wb-modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,0.35); display:flex; align-items:center; justify-content:center; z-index:50; }
+.wb-modal { background:#fff; border-radius:14px; padding:18px; width:min(90vw, 380px); display:flex; flex-direction:column; gap:8px; }
+.wb-modal label { font-size:12px; color:#666; margin-top:6px; }
+.wb-modal select, .wb-modal input[type="file"] { padding:8px; border:1px solid #ddd; border-radius:9px; }

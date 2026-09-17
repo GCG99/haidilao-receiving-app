@@ -2,12 +2,14 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { OverviewPage } from "./components/OverviewPage";
+import { WorkbenchPage } from "./components/WorkbenchPage";
 import "./styles.css";
 
 const isOverviewRoute = window.location.pathname.startsWith("/overview");
+const isWorkbenchRoute = window.location.pathname.startsWith("/workbench");
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    {isOverviewRoute ? <OverviewPage /> : <App />}
+    {isOverviewRoute ? <OverviewPage /> : isWorkbenchRoute ? <WorkbenchPage /> : <App />}
   </React.StrictMode>
 );
