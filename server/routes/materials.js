@@ -98,6 +98,21 @@ export function createMaterialsRouter({ requireLogin }) {
     }
   });
 
+  // 供叫货记录/盘点配置这类前端表单做物料搜索用，名称模糊匹配，限20条。
+  router.get("/search/by-name", requireLogin, async (req, res) => {
+    const { q } = req.query;
+    if (!q || String(q).trim().length === 0) return res.json({ materials: [] });
+    try {
+      const { rows } = await pool.query(
+        "SELECT sku, name, unit FROM materials WHERE name ILIKE $1 AND record_status = '在用' ORDER BY name LIMIT 20",
+        [`%${q}%`]
+      );
+      res.json({ materials: rows });
+    } catch (error) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // 单段通配路由放在最后，避免遮住上面那些同样是单段字面路径的路由。
   router.get("/:sku", requireLogin, async (req, res) => {
     try {
