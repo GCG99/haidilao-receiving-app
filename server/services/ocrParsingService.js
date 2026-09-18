@@ -115,7 +115,12 @@ async function callExtractionTool(buffer, mimeType, tool, promptText) {
   const response = await client.messages.create(
     {
       model: MODEL,
-      max_tokens: 4096,
+      // 2026-09-18实测发现的真实bug：明细行多的发票(20+行)在写完header.source_quotes后
+      // 4096不够生成完items数组，stop_reason=max_tokens截断，tool_use.input里items整个
+      // 缺失——被下面的完整性校验正确拦下但会计入OCR_INCOMPLETE_RESPONSE失败，此前一直误判
+      // 是"文档渲染问题"，实测(CFC 7月Invoice.pdf 21行明细，同一份文件4096截断/8192完整)
+      // 确认是token预算问题不是内容问题。8192是这份实测样本的2倍余量，不是精确计算出的下限。
+      max_tokens: 8192,
       tools: [tool],
       tool_choice: { type: "tool", name: tool.name },
       messages: [
