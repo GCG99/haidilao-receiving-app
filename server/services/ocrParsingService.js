@@ -98,6 +98,58 @@ const CREDIT_TOOL = {
   }
 };
 
+const STATEMENT_TOOL = {
+  name: "extract_statement",
+  description: "从这张供应商对账单（Statement）图片/PDF里提取结构化字段",
+  input_schema: {
+    type: "object",
+    properties: {
+      // 字段名沿用 is_invoice（不是 is_statement）：复用跟 INVOICE_TOOL/CREDIT_TOOL 同一段
+      // callExtractionTool() 完整性校验逻辑，三边字段名对齐才能共用同一个if判断。
+      is_invoice: { type: "boolean", description: "这份文档是不是一张供应商对账单/Statement，不是的话填false" },
+      header: {
+        type: "object",
+        properties: {
+          statement_date: { type: ["string", "null"], description: "格式 YYYY-MM-DD，通常是对账单的 As At/Statement Date" },
+          account_no: { type: ["string", "null"] },
+          opening_balance: { type: ["number", "null"] },
+          closing_balance: { type: ["number", "null"], description: "对账单上的期末总额/Balance Due，不是逐行累加算出来的" },
+          currency: { type: "string", description: "三位货币代码，没写明的话默认 AUD" },
+          confidence: { type: "number", description: "0~1之间，表头整体识别置信度" },
+          source_quotes: {
+            type: "object",
+            description: "每个字段在原文里读到的原始文字片段，key跟上面字段名对应，方便人工核对定位",
+            additionalProperties: { type: "string" }
+          }
+        },
+        required: ["confidence"]
+      },
+      // 供应商身份不放进这个工具的字段——跟 invoice/credit 的既有模式一致，供应商归属由
+      // 调用方按文件夹名匹配 suppliers 表解决，不依赖视觉模型猜测。
+      items: {
+        type: "array",
+        description: "对账单逐行明细（每张发票/Credit Note/付款记录一行），没有明细行的话返回空数组",
+        items: {
+          type: "object",
+          properties: {
+            transaction_date: { type: ["string", "null"], description: "格式 YYYY-MM-DD" },
+            reference: { type: ["string", "null"], description: "该行对应的发票号/Credit Note号/单据号，原样摘抄" },
+            transaction_type: { type: ["string", "null"], description: "自由文本，如 Invoice / Credit Note / Payment" },
+            amount: { type: ["number", "null"] },
+            running_balance: { type: ["number", "null"] },
+            due_date: { type: ["string", "null"], description: "格式 YYYY-MM-DD" },
+            confidence: { type: "number" },
+            source_quote: { type: ["string", "null"] }
+          },
+          required: ["confidence"]
+        }
+      },
+      notes: { type: ["string", "null"], description: "任何值得人工注意的异常情况，没有就填null" }
+    },
+    required: ["is_invoice", "header", "items"]
+  }
+};
+
 function contentBlockFor(mimeType, base64Data) {
   if (mimeType === "application/pdf") {
     return { type: "document", source: { type: "base64", media_type: mimeType, data: base64Data } };
@@ -191,5 +243,17 @@ export async function parseCreditDocument(buffer, mimeType) {
     "这是一张来自澳洲供应商的 Credit Note（退款/折让单），请提取表头信息。金额是AUD澳元。" +
       "每个字段尽量附上你在原文里读到的原始文字摘抄。" +
       "如果这份文档根本不是Credit Note，把 is_invoice 设为 false 并在 notes 里说明原因。"
+  );
+}
+
+export async function parseStatementDocument(buffer, mimeType) {
+  return callExtractionTool(
+    buffer,
+    mimeType,
+    STATEMENT_TOOL,
+    "这是一张来自澳洲供应商的对账单（Account Statement），请提取表头信息和逐行明细（每张发票/Credit Note/付款记录一行）。" +
+      "金额是AUD澳元。closing_balance请填对账单上原本印着的期末总额，不要自己重新计算。" +
+      "每个字段尽量附上你在原文里读到的原始文字摘抄。" +
+      "如果这份文档根本不是对账单，把 is_invoice 设为 false 并在 notes 里说明原因。"
   );
 }
