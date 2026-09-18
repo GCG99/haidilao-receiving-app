@@ -1045,7 +1045,9 @@ if (process.env.DATABASE_URL) {
     { createMaterialsRouter },
     { createAuditLogsRouter },
     { createStatementsRouter },
-    { createWorkbenchRouter }
+    { createWorkbenchRouter },
+    { createOrderRequestsRouter },
+    { createStocktakeRouter }
   ] = await Promise.all([
     import("./routes/invoices.js"),
     import("./routes/erpReceipts.js"),
@@ -1053,7 +1055,9 @@ if (process.env.DATABASE_URL) {
     import("./routes/materials.js"),
     import("./routes/auditLogs.js"),
     import("./routes/statements.js"),
-    import("./routes/workbench.js")
+    import("./routes/workbench.js"),
+    import("./routes/orderRequests.js"),
+    import("./routes/stocktake.js")
   ]);
 
   app.use("/api/invoices", createInvoicesRouter({ requireLogin }));
@@ -1063,6 +1067,8 @@ if (process.env.DATABASE_URL) {
   app.use("/api/audit-logs", createAuditLogsRouter({ requireLogin }));
   app.use("/api/statements", createStatementsRouter({ requireLogin }));
   app.use("/api/workbench", createWorkbenchRouter({ requireLogin }));
+  app.use("/api/order-requests", createOrderRequestsRouter({ requireLogin }));
+  app.use("/api/stocktake", createStocktakeRouter({ requireLogin }));
 
   console.log("录单工作台（Invoice/Credit/ERP入库单）已启用（检测到 DATABASE_URL）。");
 } else {
@@ -1072,7 +1078,7 @@ if (process.env.DATABASE_URL) {
       message: "录单工作台功能需要 Postgres，当前环境未配置 DATABASE_URL。收货/登录等其他功能不受影响。"
     });
   };
-  for (const base of ["/api/invoices", "/api/erp-receipts", "/api/credits", "/api/materials", "/api/audit-logs", "/api/statements", "/api/workbench"]) {
+  for (const base of ["/api/invoices", "/api/erp-receipts", "/api/credits", "/api/materials", "/api/audit-logs", "/api/statements", "/api/workbench", "/api/order-requests", "/api/stocktake"]) {
     app.use(base, notConfigured);
   }
 
