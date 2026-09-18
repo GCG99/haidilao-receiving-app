@@ -168,4 +168,6 @@
   - **顺带清理**：发现2条明显的测试数据残留(`invoice_no=TEST-9001`，B&E/BNE各1条，内容是"Frozen Prawns"这种测试占位数据，早期开发测试阶段留下、从未清理)，已删除。
   - 最终结果：不再有任何`(supplier_id, invoice_no)`重复；8月invoices从230条降到194条，合计$206,727.55；7月不受影响，仍是147条$189,285.67(北方/BNE/Coworkc这次的重复问题只出现在8月批次)。
 
+- [x] **8月pending清单里的Sunstae/FUJA用发票号证据解决，HAC确认无解**：Sunstae文件夹的发票号"01965"跟已有供应商"Sunstate"(拼写差一个字母)同月发票号完全一致，用户确认合并；FUJA文件夹发票号"INV-000166"格式跟"福嘉"(SUP-043)7月的"INV-000115"序列延续，而名字更像的"福嘉FUJA"(SUP-044)完全没有历史发票记录，用户确认归入"福嘉"。两个都导入后发现Sunstate又产生了跟Beifang/BNE/Coworkc同样模式的空表头重复(发票号格式不同：spreadsheet记的"01965" vs OCR读到的完整"INV/26-27/01965")，核对日期金额一致后删除空表头那条。福嘉没有重复(7月/8月本来就是两张不同发票)。**HAC没有任何候选供应商匹配，维持pending，需要用户提供真实信息**。8月invoices最终195条，合计$207,805.57。
+
 本地commit：见下方commit hash。**仍未push、未碰生产库**（`ocrParsingService.js`的max_tokens修复虽然是纯技术性bug修复且已充分验证，push会让这个改动影响生产环境的`/api/invoices/:id/parse`路由，仍然按规矩等用户确认后再push）。
