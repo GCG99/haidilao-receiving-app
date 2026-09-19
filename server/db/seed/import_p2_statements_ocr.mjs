@@ -24,17 +24,36 @@ const PENDING_OUT = "C:\\Users\\18426\\Desktop\\库管\\haidilao-receiving-app\\
 const STATEMENT_NAME_RE = /statement|对账/i;
 const MIME_BY_EXT = { ".pdf": "application/pdf", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png" };
 
-async function findSupplierExact(client, candidateName) {
-  const { rows } = await client.query("SELECT id, name, merged_into_id FROM suppliers WHERE name = $1", [candidateName]);
-  if (rows.length === 0) return null;
-  let supplier = rows[0];
+async function findSupplier(client, candidateName) {
+  // 跟import_p2_august_bundled_invoices_split.mjs的findSupplier同一套逻辑：先精确匹配，
+  // 不行再试大小写不敏感匹配，但只有唯一候选时才采用——同一大小写不敏感结果命中多个不同
+  // 供应商ID的话不擅自选一个，进pending。这次新发现AU6D8月/下的FRIENDSHIP、SUPAGAS两个
+  // 文件夹名跟suppliers.name大小写不一致，之前的精确匹配版本会把这两个供应商的Statement
+  // 文件错误地扔进pending——这是纯字符串匹配容错，不是供应商身份判断。
+  const exact = await client.query("SELECT id, name, merged_into_id FROM suppliers WHERE name = $1", [candidateName]);
+  let supplier = null;
+  let matchType = null;
+  if (exact.rows.length === 1) {
+    supplier = exact.rows[0];
+    matchType = "exact";
+  } else {
+    const ci = await client.query("SELECT id, name, merged_into_id FROM suppliers WHERE LOWER(name) = LOWER($1)", [candidateName]);
+    if (ci.rows.length === 1) {
+      supplier = ci.rows[0];
+      matchType = "case_insensitive_unique";
+    } else if (ci.rows.length > 1) {
+      return { supplier: null, matchType: "case_insensitive_ambiguous", candidates: ci.rows };
+    } else {
+      return { supplier: null, matchType: "no_match" };
+    }
+  }
   // 沿用invoices导入脚本的既定处理：供应商已被合并的话，落到合并后的目标供应商，
   // 不要求每个历史批次自己重复判断合并关系。
   if (supplier.merged_into_id) {
     const target = await client.query("SELECT id, name FROM suppliers WHERE id = $1", [supplier.merged_into_id]);
-    if (target.rows.length > 0) return target.rows[0];
+    if (target.rows.length > 0) return { supplier: target.rows[0], matchType };
   }
-  return { id: supplier.id, name: supplier.name };
+  return { supplier: { id: supplier.id, name: supplier.name }, matchType };
 }
 
 function sha256File(buf) {
@@ -87,11 +106,14 @@ async function main() {
   try {
     for (const { supplierFolder, filePath, mimeType } of targets) {
       console.log(`\n--- 处理 ${supplierFolder}: ${filePath} ---`);
-      const supplier = await findSupplierExact(client, supplierFolder);
+      const { supplier, matchType, candidates } = await findSupplier(client, supplierFolder);
       if (!supplier) {
-        console.log(`  [pending] 供应商文件夹名"${supplierFolder}"在suppliers表无精确匹配`);
-        results.pending.push({ reason: "supplier_no_exact_match", supplierFolder, filePath });
+        console.log(`  [pending] 供应商文件夹名"${supplierFolder}"匹配失败(${matchType})`);
+        results.pending.push({ reason: "supplier_no_match", matchType, candidates, supplierFolder, filePath });
         continue;
+      }
+      if (matchType === "case_insensitive_unique") {
+        console.log(`  (大小写不敏感匹配到唯一候选: ${supplier.name})`);
       }
 
       const buf = fs.readFileSync(filePath);
