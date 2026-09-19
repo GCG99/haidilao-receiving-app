@@ -371,6 +371,9 @@ export function WorkbenchPage() {
       <a className="overview-link" href="/" target="_self" rel="noreferrer">
         ← 返回每日收货
       </a>
+      <a className="overview-link" href="/erp" target="_self" rel="noreferrer">
+        ERP 入库单 →
+      </a>
 
       {selectedId !== null ? (
         <InvoiceDetail id={selectedId} onBack={() => { setSelectedId(null); reload(); }} onChanged={reload} />
