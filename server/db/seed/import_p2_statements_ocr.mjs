@@ -117,6 +117,26 @@ async function main() {
       }
 
       const buf = fs.readFileSync(filePath);
+
+      // 2026-09-19发现的真实低效问题：原来的重复检测在OCR调用之后才做，导致每次重跑
+      // 这个脚本，已经成功导入过的文件也会被重新OCR一次——浪费真实API调用，而且这次
+      // 会话确认了这个Claude Code sandbox对api.anthropic.com出站调用偶发不稳定，多余的
+      // 重跑只是徒增暴露在这个不稳定环境里的次数。sha256在读完文件后立刻就能算，提前到
+      // OCR调用之前查重，已经导入过的文件直接跳过、完全不碰OCR。
+      const sha256 = sha256File(buf);
+      const existingSourceFile = await client.query("SELECT id FROM source_files WHERE sha256 = $1", [sha256]);
+      if (existingSourceFile.rows.length > 0) {
+        const dupBySource = await client.query(
+          "SELECT id FROM supplier_statements WHERE source_file_id = $1",
+          [existingSourceFile.rows[0].id]
+        );
+        if (dupBySource.rows.length > 0) {
+          console.log(`  [pending] 该文件(sha256已存在)已导入过statement id=${dupBySource.rows[0].id}，跳过(未调用OCR)`);
+          results.pending.push({ reason: "duplicate_source_file", supplierFolder, filePath, existingId: dupBySource.rows[0].id });
+          continue;
+        }
+      }
+
       let parsed;
       try {
         parsed = await parseStatementDocument(buf, mimeType);
