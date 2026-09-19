@@ -11,9 +11,21 @@ from pathlib import Path
 
 import openpyxl
 
-KUGUAN_ROOT = Path(__file__).resolve().parents[5]  # .../库管
-P1_BASELINE = KUGUAN_ROOT / "P1_物料供应商分类_最终版_20260813_011015.xlsx"
-SUPPLIER_CODE_FILE = KUGUAN_ROOT / "供应商代码.xls"
+KUGUAN_ROOT = Path(__file__).resolve().parents[4]  # .../库管
+# 2026-09-19发现的真实bug：这两个路径从写出来就没跟上2026-09-18的项目重组——
+# (1) parents[5]算错了一层，实际会算到Desktop而不是库管，两个文件从来没被
+#     正确找到过（脚本压根跑不起来，不是"跑了但用旧数据"这么温和）；
+# (2) P1基线硬编码成了2026-08-13的第一版，从来没跟着后续批次B~L的全部修正
+#     更新过——哪怕(1)修好了，脚本导出的也一直是清洗前的旧版本。这意味着
+#     Postgres的materials/categories/suppliers表(本地开发库和生产库都一样)
+#     从2026-09-14做种子导入以来，从未真正跟P1 Excel管道的最终清洗结果同步过。
+#     具体例子：MEAT-0075(瘦羊腿)早在批次B(2026-09-17)就该合并停用，但Postgres
+#     里至今还显示"在用"。
+# (3) 供应商代码表的文件名也从.xls改成了.xlsx（2026-09-18那次文件整理时一并
+#     发生的），旧扩展名同样会导致FileNotFoundError。
+# 三处都已用当前实际文件系统状态核实过存在性，不是猜测性修复。
+P1_BASELINE = KUGUAN_ROOT / "haidilao-receiving-app" / "库管数据" / "P1_物料供应商分类_最终版_20260917_232357.xlsx"
+SUPPLIER_CODE_FILE = KUGUAN_ROOT / "供应商代码.xlsx"
 OUT_DIR = Path(__file__).resolve().parent / "data"
 
 # 收货小程序（飞书"供应商计划"Base）里实际使用的名字 -> P1 正式供应商名称。
@@ -96,6 +108,29 @@ def build_suppliers():
                 "merged_into_id": row["合并至供应商ID"],
             }
         )
+
+    # 2026-09-20发现的真实冲突：P1 Excel基线自己的"供应商"表里的供应商合并记录，
+    # 跟haidilao-receiving-app项目2026-09-18那次"翻发票号交叉核对"发现并确认的
+    # 供应商身份结论不一致——P1基线里B&E(SUP-003)的合并方向是"并入BNE(SUP-004)"，
+    # 而且完全没有记录"北方→Beifang"和"Coworkc→Cowrock"这两组合并。用户2026-09-20
+    # 明确确认："B&E是保留方，BNE并入B&E"——跟P1基线的方向正好相反。
+    # 这4组是haidilao-receiving-app这条线单独确认的、P1基线还没跟上的最新结论，
+    # 不去动P1基线本身(那是另一套有自己版本化流程的正式产物，不在这个脚本的职责
+    # 范围内)，只在导出这一步做覆盖修正，让Postgres拿到的是最新确认的身份关系。
+    SUPPLIER_MERGE_OVERRIDES = {
+        "SUP-023": "SUP-047",  # SKYJ -> 领鲜（P1基线本身就有这条，覆盖是保险，不是修正）
+        "SUP-034": "SUP-005",  # 北方 -> Beifang（P1基线缺失，2026-09-18确认）
+        "SUP-004": "SUP-003",  # BNE -> B&E（P1基线方向反了，2026-09-20用户重新确认）
+        "SUP-010": "SUP-011",  # Coworkc -> Cowrock（P1基线缺失，2026-09-18确认）
+    }
+    CLEAR_MERGE = {"SUP-003"}  # B&E本身不能再指向BNE，P1基线里这条是错的，清空
+
+    for row in out:
+        if row["id"] in SUPPLIER_MERGE_OVERRIDES:
+            row["merged_into_id"] = SUPPLIER_MERGE_OVERRIDES[row["id"]]
+        elif row["id"] in CLEAR_MERGE:
+            row["merged_into_id"] = None
+
     return out, by_name
 
 

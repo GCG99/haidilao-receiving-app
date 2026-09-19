@@ -105,9 +105,25 @@ async function loadMaterials(client) {
     );
   }
 
+  // 2026-09-20发现的真实数据模型冲突：P1里"SKU拆分"这类特殊情况(一个原SKU被拆成
+  // 多个真实SKU，比如SEA-0013拆成SEA-0012+VEG-0089)，"合并至SKU"字段存的是一段
+  // 描述性文字("已拆分,见旧SKU映射:SEA-0012;VEG-0089")，不是单一可查找的SKU——
+  // Postgres这边的materials_merged_into_sku_fkey要求这个字段要么是NULL要么是一个
+  // 真实存在的SKU，两边模型不匹配。这类描述性文本不写进这个字段(会违反外键)，
+  // 完整原文已经在raw字段里保留(供以后查证)，这里只是不让它去撞外键约束。
+  const skuSet = new Set(materials.map((x) => x.sku));
+  let skippedNonSkuMerge = 0;
   for (const m of materials) {
     if (!m.merged_into_sku) continue;
+    if (!skuSet.has(m.merged_into_sku)) {
+      skippedNonSkuMerge++;
+      console.warn(`跳过非真实SKU的merged_into_sku(已保留在raw字段里)：${m.sku} -> ${m.merged_into_sku}`);
+      continue;
+    }
     await client.query(`UPDATE materials SET merged_into_sku = $1 WHERE sku = $2`, [m.merged_into_sku, m.sku]);
+  }
+  if (skippedNonSkuMerge > 0) {
+    console.log(`共跳过 ${skippedNonSkuMerge} 条非真实SKU的merged_into_sku`);
   }
 
   console.log(`materials: ${materials.length} 条已写入`);
