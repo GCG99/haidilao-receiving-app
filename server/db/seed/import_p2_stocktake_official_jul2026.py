@@ -65,7 +65,11 @@ def main():
 
     for r in range(4, ws.max_row + 1):
         code = ws.cell(row=r, column=3).value
-        if code is None:
+        # 2026-09-19发现的真实bug：源表格从第475行起是"公式链接但无实际物料"的模板占位行——
+        # 物料编码/名称/全部数量列的公式返回数字0而不是空值None，原来的"code is None"判断
+        # 拦不住这种情况，导致287行(占757行总数的38%)垃圾数据被当成真实盘点记录插入。
+        # 真实物料编码不可能是字面值0，用这条兜底。
+        if code is None or code == 0:
             continue
         total_rows += 1
         name = ws.cell(row=r, column=4).value
