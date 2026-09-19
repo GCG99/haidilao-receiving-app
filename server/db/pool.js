@@ -19,6 +19,17 @@ export const pool = new Pool({
   ssl: useSsl ? { rejectUnauthorized: false } : undefined
 });
 
+// node-postgres 官方文档明确要求：池里空闲的连接偶尔会在后台异步抛出错误
+// (网络中断、Render Postgres 重启等)，这些错误不属于任何一次请求的 promise 链，
+// 不会被路由自己的 try/catch 或 Express 5 的自动 promise 捕获接住。如果不监听
+// pool 的 'error' 事件，Node 会把它当成未捕获异常，直接终止整个进程——
+// 影响的不只是这批 Postgres 路由，收货/登录/OCR 这些完全不用 pool 的功能也会
+// 被一起拖垮，因为它们跑在同一个进程里。2026-09-19发现的express.json()漏挂
+// 是同一类"从上线第一天就存在、从未被任何一次正常测试触发过"的系统性缺口。
+pool.on("error", (error) => {
+  console.error("Postgres 连接池后台错误(不影响当前请求，已被捕获，不会导致进程崩溃)：", error);
+});
+
 export function query(text, params) {
   return pool.query(text, params);
 }
