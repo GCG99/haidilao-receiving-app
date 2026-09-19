@@ -130,3 +130,36 @@ test("PUT /:id/items 对存在的发票成功写入，且同一事务里落了�
   );
   assert.ok(rows.length >= 1, "存在的发票替换明细行应该写审计日志");
 });
+
+// 2026-09-19新增：之前完全没有全局错误处理中间件，multer的fileFilter/MulterError
+// 会落到Express默认错误页(HTML，不是JSON)，前端fetch().json()会解析失败、看到的
+// 是一个跟其他接口完全不一致的报错体验。这两个测试锁定新加的错误处理中间件行为。
+test("POST /upload 不支持的文件类型(fileFilter拒绝)返回400 JSON而不是500/HTML", async () => {
+  const form = new FormData();
+  form.append("supplier_id", SUPPLIER_ID);
+  form.append("file", new Blob([Buffer.from("not a real document")], { type: "text/plain" }), "test.txt");
+  const res = await fetch(`${server.baseUrl}/api/invoices/upload`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: form
+  });
+  assert.equal(res.status, 400);
+  assert.equal(res.headers.get("content-type")?.includes("application/json"), true);
+  const body = await res.json();
+  assert.match(body.message, /PDF.*JPEG.*PNG.*WEBP/);
+});
+
+test("POST /upload 超过大小限制(MulterError LIMIT_FILE_SIZE)返回400 JSON而不是崩溃", async () => {
+  const oversized = Buffer.alloc(21 * 1024 * 1024, 1); // 路由限制是20MB
+  const form = new FormData();
+  form.append("supplier_id", SUPPLIER_ID);
+  form.append("file", new Blob([oversized], { type: "application/pdf" }), "big.pdf");
+  const res = await fetch(`${server.baseUrl}/api/invoices/upload`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: form
+  });
+  assert.equal(res.status, 400);
+  const body = await res.json();
+  assert.equal(body.code, "LIMIT_FILE_SIZE");
+});

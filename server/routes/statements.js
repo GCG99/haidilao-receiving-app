@@ -9,7 +9,7 @@ const upload = multer({
   limits: { fileSize: 20 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const allowed = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
-    if (!allowed.includes(file.mimetype)) return cb(new Error("只支持 PDF / JPEG / PNG / WEBP 格式。"));
+    if (!allowed.includes(file.mimetype)) return cb(Object.assign(new Error("只支持 PDF / JPEG / PNG / WEBP 格式。"), { statusCode: 400 }));
     cb(null, true);
   }
 });

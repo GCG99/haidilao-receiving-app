@@ -1113,6 +1113,37 @@ if (fs.existsSync(distPath)) {
   });
 }
 
+// 全局错误处理中间件（必须放在全部路由/静态文件服务之后，4个参数是Express识别
+// "这是错误处理中间件"的固定写法）。此前完全没有这一层，两类错误会漏到Express
+// 自己的默认错误页(返回HTML，不是这个API一贯的JSON格式，前端fetch().json()会
+// 解析失败)：(1) multer在中间件阶段自己抛的错误(比如超过15MB的 LIMIT_FILE_SIZE)，
+// 这类错误发生在路由handler自己的try/catch生效之前，走的是Express的错误传递
+// 通道而不是普通的同步/异步异常；(2) 任何未来漏写try/catch的路由(目前审计过
+// 全部41个handler，没有漏的，但这层兜底不依赖"以后也不会漏写"这个假设)。
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+
+  if (err instanceof multer.MulterError) {
+    return res.status(400).json({
+      code: err.code,
+      message: `文件上传失败：${err.message}`
+    });
+  }
+
+  // routes/{invoices,credits,statements}.js 的 fileFilter 拒绝不支持的文件类型时
+  // 会标一个 statusCode=400（本身不是MulterError实例，因为是业务自定义校验
+  // 而不是multer内置的大小/数量限制）——识别这个标记，返回400而不是落到下面的
+  // 通用500分支（500在语义上意味着"服务器出错"，但这其实是客户端输入问题）。
+  if (err && err.statusCode === 400) {
+    return res.status(400).json({ message: err.message });
+  }
+
+  console.error("未分类错误：", err);
+  res.status(500).json({
+    message: err instanceof Error ? err.message : String(err)
+  });
+});
+
 // 测试套件用 import(...) 导入这个模块拿 app 自己搭 http server 测试，不需要也不应该
 // 真的监听端口/跑ensureReceivingFields——只有直接 `node server/index.js` 启动时才监听。
 const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
