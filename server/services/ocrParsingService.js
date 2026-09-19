@@ -157,6 +157,21 @@ function contentBlockFor(mimeType, base64Data) {
   return { type: "image", source: { type: "base64", media_type: mimeType, data: base64Data } };
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// 2026-09-19发现：完整性校验本身工作正常(见下方)，但被拦下的响应此前直接判失败，
+// 没有重试。同一份文件、同一段代码、同一次真实API调用，连续3次分别是
+// 失败/成功/失败——这是模型tool_choice强制调用下真实存在的输出非确定性，不是网络
+// /环境问题(上一轮"sandbox代理干扰"的诊断已经用多次真实调用证伪，caller字段稳定
+// 存在且内容不受影响，见项目memory)。最多重试2次(共3次调用)：只针对"模型没有正确
+// 走工具调用"这一类随机性失败(OCR_NO_TOOL_USE/OCR_INCOMPLETE_RESPONSE)，不包括
+// OCR_NOT_CONFIGURED(配置错误，重试没有意义)或网络类错误(SDK自己的超时/连接错误，
+// 重试策略不同，维持现有"标记failed+人工重试"路径，不在这里吃掉)。
+const RETRYABLE_CODES = new Set(["OCR_NO_TOOL_USE", "OCR_INCOMPLETE_RESPONSE"]);
+const MAX_ATTEMPTS = 3;
+
 async function callExtractionTool(buffer, mimeType, tool, promptText) {
   if (!client) {
     const error = new Error("ANTHROPIC_API_KEY 未配置，OCR解析功能不可用。");
@@ -164,6 +179,23 @@ async function callExtractionTool(buffer, mimeType, tool, promptText) {
     throw error;
   }
 
+  let lastError;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      return await callExtractionToolOnce(buffer, mimeType, tool, promptText);
+    } catch (error) {
+      lastError = error;
+      if (!RETRYABLE_CODES.has(error.code) || attempt === MAX_ATTEMPTS) {
+        throw error;
+      }
+      console.warn(`OCR第${attempt}次调用返回${error.code}，1秒后重试(最多${MAX_ATTEMPTS}次)：${error.message}`);
+      await sleep(1000);
+    }
+  }
+  throw lastError;
+}
+
+async function callExtractionToolOnce(buffer, mimeType, tool, promptText) {
   const response = await client.messages.create(
     {
       model: MODEL,
