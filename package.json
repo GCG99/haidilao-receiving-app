@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "concurrently -k \"node server/index.js\" \"vite --open\"",
     "build": "vite build",
-    "start": "node server/index.js"
+    "start": "node server/index.js",
+    "test": "node --test test/unit/statementReconciliation.test.mjs test/integration/invoices.test.mjs test/integration/credits.test.mjs test/integration/materialMatching.test.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.126.0",
