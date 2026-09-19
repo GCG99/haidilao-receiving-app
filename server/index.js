@@ -4,8 +4,20 @@ import multer from "multer";
 import crypto from "node:crypto";
 import path from "node:path";
 import fs from "node:fs";
+import { pathToFileURL } from "node:url";
 
 const app = express();
+export { app };
+// 2026-09-19发现的真实生产bug：这个app从来没有挂过JSON body-parser中间件，
+// 但invoices.js/credits.js/materials.js等一大批录单工作台路由的handler都直接
+// 解构req.body(比如 `const { invoice_no } = req.body`)——每一个用JSON body调用
+// 这些路由的真实请求(不是走multer的multipart上传路由)req.body都是undefined，
+// 解构会同步抛TypeError，Express把它转成500。用真实curl请求对着真实跑起来的
+// server验证过：POST /api/invoices/:id/fields 带JSON body直接500，加了这行
+// express.json()之后同样的请求返回预期的404(测试用的id不存在，但不再是500)。
+// multer的multipart/form-data路由(/upload)不受影响——express.json()只处理
+// Content-Type: application/json的请求，会自动跳过其他类型。
+app.use(express.json({ limit: "2mb" }));
 const port = Number(process.env.PORT || 3001);
 const FEISHU = "https://open.feishu.cn";
 const AUTHORIZE_URL = "https://accounts.feishu.cn/open-apis/authen/v1/authorize";
@@ -1101,10 +1113,15 @@ if (fs.existsSync(distPath)) {
   });
 }
 
-app.listen(port, () => {
-  console.log(`收货系统后端：http://localhost:${port}`);
+// 测试套件用 import(...) 导入这个模块拿 app 自己搭 http server 测试，不需要也不应该
+// 真的监听端口/跑ensureReceivingFields——只有直接 `node server/index.js` 启动时才监听。
+const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isDirectRun) {
+  app.listen(port, () => {
+    console.log(`收货系统后端：http://localhost:${port}`);
 
-  ensureReceivingFields().catch((error) => {
-    console.error("初始化收货记录表字段失败（不影响其他功能）：", error);
+    ensureReceivingFields().catch((error) => {
+      console.error("初始化收货记录表字段失败（不影响其他功能）：", error);
+    });
   });
-});
+}
