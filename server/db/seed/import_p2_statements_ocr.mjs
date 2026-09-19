@@ -174,10 +174,14 @@ async function main() {
 
         // 期末总额核对：只用来打状态标记，不改动任何金额字段，也不据此臆造/修正任何数据——
         // 纯粹是给人工复核用的信号，不是自动纠错。
+        // 2026-09-19修复的真实bug：原公式只比较sum(明细)跟closing_balance，完全没算上
+        // 账户的期初余额(opening_balance)——任何有跨期结转余额的正常贸易账户(几乎所有
+        // 真实供应商账户都是这样)都会被误判成discrepancy。见migration 0012注释。
+        const opening = typeof header.opening_balance === "number" ? header.opening_balance : 0;
         const sumOfAmounts = items.reduce((s, it) => s + (typeof it.amount === "number" ? it.amount : 0), 0);
         const closing = header.closing_balance;
         const hasBothTotals = typeof closing === "number" && items.length > 0;
-        const discrepancy = hasBothTotals ? Number((closing - sumOfAmounts).toFixed(2)) : null;
+        const discrepancy = hasBothTotals ? Number((closing - opening - sumOfAmounts).toFixed(2)) : null;
         // 千分之一或1澳元(取较大者)以内的差异算浮点/取整噪音，不算真实不平——门槛本身不是
         // 精确计算出来的，只是一个防止把正常四舍五入噪音当成异常来标记的粗筛门槛。
         const tolerance = Math.max(1, Math.abs(closing || 0) * 0.001);
@@ -185,10 +189,11 @@ async function main() {
 
         const { rows: stRows } = await client.query(
           `INSERT INTO supplier_statements
-             (supplier_id, statement_date, account_no, total_balance, source_file_id, status)
-           VALUES ($1,$2,$3,$4,$5,$6)
+             (supplier_id, statement_date, account_no, total_balance, opening_balance, source_file_id, status)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)
            RETURNING id`,
-          [supplier.id, header.statement_date || null, header.account_no || null, closing ?? null, sourceFileId, status]
+          [supplier.id, header.statement_date || null, header.account_no || null, closing ?? null,
+           typeof header.opening_balance === "number" ? header.opening_balance : null, sourceFileId, status]
         );
         const statementId = stRows[0].id;
 
