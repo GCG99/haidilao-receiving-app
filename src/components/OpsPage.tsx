@@ -5,6 +5,7 @@ import { useAuth } from "../hooks/useAuth";
 interface Supplier {
   id: string;
   name: string;
+  merged_into_id?: string | null;
 }
 
 interface MaterialOption {
@@ -378,7 +379,8 @@ function NewOrderRequestModal({
         <label>供应商</label>
         <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
           <option value="">请选择供应商</option>
-          {suppliers.map((s) => (
+          {/* 已合并的旧供应商(比如SKYJ已并入领鲜)不该再被选来关联新叫货记录 */}
+          {suppliers.filter((s) => !s.merged_into_id).map((s) => (
             <option key={s.id} value={s.id}>
               {s.name}
             </option>

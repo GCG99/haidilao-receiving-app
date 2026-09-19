@@ -57,10 +57,14 @@ export function createWorkbenchRouter({ requireLogin }) {
   });
 
   // 供应商全量列表(Postgres suppliers表，不是按日期过滤的飞书配送计划)，
-  // 给"录单工作台"上传发票时选供应商用。
+  // 给"录单工作台"上传发票时选供应商用，也被StatementsPage/OpsPage复用做供应商名称
+  // 查找。带上merged_into_id(不过滤)，让前端自己决定：新建记录(上传发票/新建叫货)
+  // 这类"选一个供应商"的下拉框应该排除已合并的旧供应商(避免选到SKYJ这种已经并入
+  // 领鲜、不该再被引用的旧ID)，但按supplier_id反查名称做展示用途的地方不能过滤
+  // (万一历史数据还挂在旧ID下，过滤掉会导致查不到名字)。
   router.get("/suppliers", requireLogin, async (req, res) => {
     try {
-      const { rows } = await pool.query("SELECT id, name FROM suppliers ORDER BY name");
+      const { rows } = await pool.query("SELECT id, name, merged_into_id FROM suppliers ORDER BY name");
       res.json({ suppliers: rows });
     } catch (error) {
       res.status(500).json({ message: error.message });
