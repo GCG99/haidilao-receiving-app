@@ -16,7 +16,14 @@ const useSsl = /render\.com/.test(process.env.DATABASE_URL);
 
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: useSsl ? { rejectUnauthorized: false } : undefined
+  ssl: useSsl ? { rejectUnauthorized: false } : undefined,
+  // node-postgres默认connectionTimeoutMillis=0，意味着如果Postgres真的不可达
+  // (网络分区、数据库重启中)，pool.connect()会无限期挂起——请求既不报错也不
+  // 超时，用户看到的是转圈圈转到浏览器自己的fetch超时，拿不到任何有意义的
+  // 错误信息。加10秒超时后会走到路由自己的try/catch，返回明确的500 JSON。
+  // 只加这一项，没有加statement_timeout：会不会误伤某个还没被观察到的、
+  // 真实需要较长执行时间的查询没有把握，这次不做这个判断。
+  connectionTimeoutMillis: 10_000
 });
 
 // node-postgres 官方文档明确要求：池里空闲的连接偶尔会在后台异步抛出错误

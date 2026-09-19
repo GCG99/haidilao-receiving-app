@@ -17,3 +17,9 @@ test("pool 挂了 error 监听器：模拟后台连接错误不会抛出/崩溃�
     pool.emit("error", new Error("模拟的后台连接错误，仅测试用，不代表真实故障"));
   });
 });
+
+// node-postgres默认connectionTimeoutMillis=0(无限等待)。如果Postgres真的不可达，
+// 没这个配置的话pool.connect()会挂起到进程重启，请求既不报错也不超时。
+test("pool 设置了 connectionTimeoutMillis，不是默认的0(无限等待)", () => {
+  assert.equal(pool.options.connectionTimeoutMillis, 10_000);
+});
