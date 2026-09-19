@@ -8,6 +8,22 @@ import { pathToFileURL } from "node:url";
 
 const app = express();
 export { app };
+
+// 2026-09-19发现的真实生产bug：`app.set("trust proxy", ...)`从来没配置过。
+// Render(像大多数PaaS一样)自己前面有一层反向代理，真实客户端IP是通过
+// X-Forwarded-For头传过来的，但Express默认不信任这个头(防止客户端自己伪造)，
+// req.ip读的是TCP连接的直接对端地址——不设trust proxy的话读到的就是Render
+// 内部代理自己的地址。用已登录的浏览器直接读生产环境/api/audit-logs验证过：
+// 两条今天的真实审计日志ip字段分别是`::ffff:10.26.168.221`/`::ffff:10.30.183.49`
+// (私有网段，明显是Render内部代理，不是真实用户；同一用户几秒内两次请求这个
+// "IP"还不一样，印证是代理池地址)。auditService.js把req.ip存进audit_logs.ip，
+// 这张表存在的目的就是留痕/可追溯，这个字段从功能上线到现在从来没记录过一条
+// 真实用户IP。设为1表示只信任最靠近应用这一层代理(Render的架构通常是一层edge
+// 代理直接转发到应用容器)——只影响req.ip的取值来源，不涉及登录/权限判断(这个
+// 项目的登录鉴权全靠签名cookie，没有任何逻辑依赖IP做安全判断)，没有引入
+// IP伪造类的安全风险。
+app.set("trust proxy", 1);
+
 // 2026-09-19发现的真实生产bug：这个app从来没有挂过JSON body-parser中间件，
 // 但invoices.js/credits.js/materials.js等一大批录单工作台路由的handler都直接
 // 解构req.body(比如 `const { invoice_no } = req.body`)——每一个用JSON body调用

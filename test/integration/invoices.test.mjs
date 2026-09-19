@@ -149,6 +149,31 @@ test("POST /upload 不支持的文件类型(fileFilter拒绝)返回400 JSON而�
   assert.match(body.message, /PDF.*JPEG.*PNG.*WEBP/);
 });
 
+// 2026-09-19发现：app从未设置trust proxy，生产环境(Render，前面有反向代理)
+// 的req.ip读到的一直是Render内部代理地址，不是真实用户IP——用已登录浏览器
+// 读生产/api/audit-logs验证过是真实bug(ip字段全是10.x.x.x私有网段)。
+// 加了app.set("trust proxy", 1)后，Express应该信任X-Forwarded-For头。
+// 这个测试模拟"反向代理转发请求"的场景：手动带上X-Forwarded-For头，
+// 断言写入audit_logs的ip字段反映的是这个头的值，不是测试用的127.0.0.1回环地址。
+test("trust proxy生效：带X-Forwarded-For头的请求，audit_logs.ip记录的是转发的地址不是回环地址", async () => {
+  const inv = await uploadInvoice();
+  const fakeClientIp = "203.0.113.42"; // TEST-NET-3，RFC5737保留给文档/测试用，不是真实地址
+  const res = await fetch(`${server.baseUrl}/api/invoices/${inv.body.invoice.id}/fields`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json", "X-Forwarded-For": fakeClientIp },
+    body: JSON.stringify({ invoice_no: testTag("INV") })
+  });
+  assert.equal(res.status, 200);
+
+  const { rows } = await pool.query(
+    "SELECT ip FROM audit_logs WHERE entity_type = 'invoice' AND entity_id = $1 ORDER BY id DESC LIMIT 1",
+    [String(inv.body.invoice.id)]
+  );
+  assert.equal(rows.length, 1);
+  assert.match(rows[0].ip, new RegExp(fakeClientIp.replace(/\./g, "\\.")));
+  assert.doesNotMatch(rows[0].ip, /127\.0\.0\.1|::1|::ffff:127/, "不应该是测试请求本身的回环地址");
+});
+
 test("POST /upload 超过大小限制(MulterError LIMIT_FILE_SIZE)返回400 JSON而不是崩溃", async () => {
   const oversized = Buffer.alloc(21 * 1024 * 1024, 1); // 路由限制是20MB
   const form = new FormData();
