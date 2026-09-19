@@ -166,7 +166,7 @@ export function createCreditsRouter({ requireLogin }) {
         {
           credit_note_no: parsed.header.credit_note_no, credit_date: parsed.header.credit_date,
           delivery_docket_no: parsed.header.delivery_docket_no, reason: parsed.header.reason,
-          total_amount: parsed.header.total_amount
+          total_amount: parsed.header.total_amount, ocr_raw_response: parsed
         },
         auditContext
       ));

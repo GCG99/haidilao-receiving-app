@@ -187,7 +187,8 @@ export function createInvoicesRouter({ requireLogin }) {
             due_date: parsed.header.due_date, invoice_type: parsed.header.invoice_type,
             currency: parsed.header.currency, subtotal: parsed.header.subtotal, gst: parsed.header.gst,
             total_amount: parsed.header.total_amount, ocr_confidence: parsed.header.confidence,
-            parser_version: "claude-sonnet-5"
+            parser_version: "claude-sonnet-5",
+            ocr_raw_response: parsed
           },
           auditContext
         );

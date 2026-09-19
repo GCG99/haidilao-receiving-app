@@ -32,14 +32,19 @@ export async function updateCreditFields(client, creditId, fields, auditContext)
        receiving_record_id = COALESCE($5, receiving_record_id),
        reason = COALESCE($6, reason),
        total_amount = COALESCE($7, total_amount),
+       ocr_raw_response = COALESCE($8, ocr_raw_response),
        status = CASE WHEN status IN ('new', 'parse_failed') THEN 'pending_review' ELSE status END,
        updated_at = now()
-     WHERE id = $8
+     WHERE id = $9
      RETURNING *`,
     [
       fields.credit_note_no ?? null, fields.credit_date ?? null, fields.invoice_id ?? null,
       fields.delivery_docket_no ?? null, fields.receiving_record_id ?? null, fields.reason ?? null,
-      fields.total_amount ?? null, creditId
+      fields.total_amount ?? null,
+      // 只有OCR路径(/parse)传，人工录入(/confirm)不传，COALESCE保留已有值。见
+      // invoiceService.js同款字段的注释，两边是同一个设计。
+      fields.ocr_raw_response ? JSON.stringify(fields.ocr_raw_response) : null,
+      creditId
     ]
   );
 

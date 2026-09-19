@@ -38,15 +38,21 @@ export async function updateInvoiceFields(client, invoiceId, fields, auditContex
        total_amount = COALESCE($8, total_amount),
        ocr_confidence = COALESCE($9, ocr_confidence),
        parser_version = COALESCE($10, parser_version),
+       ocr_raw_response = COALESCE($11, ocr_raw_response),
        status = CASE WHEN status IN ('new', 'parse_failed') THEN 'parsed' ELSE status END,
        updated_at = now()
-     WHERE id = $11
+     WHERE id = $12
      RETURNING *`,
     [
       fields.invoice_no ?? null, fields.invoice_date ?? null, fields.due_date ?? null,
       fields.invoice_type ?? null, fields.currency ?? null, fields.subtotal ?? null,
       fields.gst ?? null, fields.total_amount ?? null, fields.ocr_confidence ?? null,
-      fields.parser_version ?? null, invoiceId
+      fields.parser_version ?? null,
+      // 只有OCR路径(/parse)会传这个字段(完整header+items+notes，含每个字段的source_quote
+      // 原文摘抄)；人工录入(/fields)不传，COALESCE保留已有值不会被清空。纯审计用途，
+      // 不参与任何业务逻辑，下面SELECT/RETURNING带出来的这份数据不应被当成其他字段的数据源。
+      fields.ocr_raw_response ? JSON.stringify(fields.ocr_raw_response) : null,
+      invoiceId
     ]
   );
 

@@ -7,6 +7,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { startTestServer, makeAuthCookie } from "../helpers/testServer.mjs";
 import { pool, createCleanupTracker, testTag } from "../helpers/testDb.mjs";
+import { withTransaction } from "../../server/db/pool.js";
+import { updateInvoiceFields } from "../../server/services/invoiceService.js";
 
 const SUPPLIER_ID = "SUP-001"; // 真实存在的供应商，测试只创建/清理发票行，不改供应商本身
 
@@ -172,6 +174,30 @@ test("trust proxy生效：带X-Forwarded-For头的请求，audit_logs.ip记录�
   assert.equal(rows.length, 1);
   assert.match(rows[0].ip, new RegExp(fakeClientIp.replace(/\./g, "\\.")));
   assert.doesNotMatch(rows[0].ip, /127\.0\.0\.1|::1|::ffff:127/, "不应该是测试请求本身的回环地址");
+});
+
+// 2026-09-19新增：migration 0013加了ocr_raw_response(jsonb)字段，只有/parse这条OCR路径
+// 会写它(人工录入/fields不接受这个字段，避免任意用户输入伪造"OCR原始响应")。直接测
+// service层的updateInvoiceFields，不经过HTTP路由——路由层刻意不从req.body读这个字段。
+test("updateInvoiceFields: 传ocr_raw_response会存进jsonb字段并完整往返；不传不会清空已有值", async () => {
+  const inv = await uploadInvoice();
+  const rawResponse = {
+    is_invoice: true,
+    header: { invoice_no: testTag("INV"), confidence: 0.9, source_quotes: { invoice_no: "Invoice No: 12345" } },
+    items: [{ supplier_item_name: "测试物料", confidence: 0.85, source_quote: "测试物料 x1 $10.00" }],
+    notes: null
+  };
+
+  await withTransaction((client) => updateInvoiceFields(client, inv.body.invoice.id, { total_amount: 10, ocr_raw_response: rawResponse }, { user: { name: "测试" }, ip: "127.0.0.1" }));
+
+  const { rows: r1 } = await pool.query("SELECT ocr_raw_response FROM invoices WHERE id = $1", [inv.body.invoice.id]);
+  assert.deepEqual(r1[0].ocr_raw_response, rawResponse);
+
+  // 再调一次不传ocr_raw_response(模拟人工录入/fields路径)，已存的raw response不应被清空(COALESCE)
+  await withTransaction((client) => updateInvoiceFields(client, inv.body.invoice.id, { total_amount: 20 }, { user: { name: "测试" }, ip: "127.0.0.1" }));
+  const { rows: r2 } = await pool.query("SELECT ocr_raw_response, total_amount FROM invoices WHERE id = $1", [inv.body.invoice.id]);
+  assert.deepEqual(r2[0].ocr_raw_response, rawResponse, "人工录入不传这个字段时，已有的OCR原始响应不应被清空");
+  assert.equal(r2[0].total_amount, "20.00");
 });
 
 test("POST /upload 超过大小限制(MulterError LIMIT_FILE_SIZE)返回400 JSON而不是崩溃", async () => {
